@@ -38,7 +38,7 @@ import time
 __all__ = [
     "EXEC_LABEL", "collect", "collect_host", "collect_backend",
     "collect_gpu_usage", "detect_runtime", "find_server_pid", "format_summary",
-    "model_file_info", "sampler_defaults",
+    "health_family", "model_file_info", "sampler_defaults", "strata_family",
 ]
 
 # execution の人間向けラベル (report / compare 共通)
@@ -337,12 +337,65 @@ def _proc_cmdlines() -> list[tuple[int, str]]:
     return out
 
 
+def _listening_pids(port: int) -> list[int]:
+    """そのポートで LISTEN しているプロセスの PID (Linux の /proc から。他OSは空).
+
+    プロセス名に頼らないので、python の server.py が待ち受ける Strata / Maya /
+    Abyss も掴める。読めるのは自分 (同じユーザ) のプロセスの fd だけ。
+    """
+    if not sys.platform.startswith("linux") or not port:
+        return []
+    inodes: set[str] = set()
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(table, encoding="ascii", errors="ignore") as f:
+                next(f, None)
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 10 or parts[3] != "0A":   # 0A = LISTEN
+                        continue
+                    if int(parts[1].rsplit(":", 1)[-1], 16) == port:
+                        inodes.add(parts[9])
+        except Exception:
+            continue
+    if not inodes:
+        return []
+    want = {f"socket:[{i}]" for i in inodes}
+    pids: list[int] = []
+    try:
+        names = os.listdir("/proc")
+    except Exception:
+        return []
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            for fd in os.listdir(f"/proc/{name}/fd"):
+                try:
+                    if os.readlink(f"/proc/{name}/fd/{fd}") in want:
+                        pids.append(int(name))
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return sorted(pids)
+
+
 def find_server_pid(port: int | None = None) -> int | None:
     """ローカルで動いている推論サーバの PID を探す.
 
     同じポートでビルドを差し替える運用を想定し、**ポート一致を最優先**する
     (CUDA版を落として ROCm版を上げた直後でも、今あがっている方を掴む)。
+    まずそのポートで LISTEN しているプロセスを見る (プロセス名を問わない)。
+    ポートを指定してどれも一致しないときは、**別のポートのサーバを返さない**
+    (以前は先頭を返していて、8082 の Abyss の計測に 11434 の ollama の起動
+    コマンドが記録されていた)。
     """
+    if port:
+        listening = _listening_pids(port)
+        if listening:
+            return listening[0]
     cands = [(pid, cmd) for pid, cmd in _proc_cmdlines()
              if any(n in cmd for n in _SERVER_NAMES)]
     if not cands:
@@ -352,7 +405,170 @@ def find_server_pid(port: int | None = None) -> int | None:
             if f"--port {port}" in cmd or f"--port={port}" in cmd or \
                     f":{port}" in cmd:
                 return pid
+        return None
     return cands[0][0]
+
+
+# ── Strata 系 (Strata / Maya / Abyss) の判別 ──────────────────────────────
+#
+# 3つとも python の serve/server.py が OpenAI 互換 API を出し、エンジン
+# (build/strata) を子プロセスで起動する。/props は llama.cpp 互換の形で
+# model_path も "pack/full" しか返さないので、HTTP だけでは llama.cpp と
+# 区別できない (Maya と Abyss は /health の形も同じ)。そこで server.py の
+# フォルダから見分ける: git の origin、VERSION、--config の JSON。
+_STRATA_FAMILY = (            # (origin / フォルダ名に含まれる語, 表示名)
+    ("abyss", "Abyss"),
+    ("project-maya", "Maya"),
+    ("maya", "Maya"),
+    ("strata", "Strata"),
+)
+
+
+def _proc_ppid(pid: int) -> int | None:
+    try:
+        with open(f"/proc/{pid}/stat", encoding="ascii", errors="ignore") as f:
+            stat = f.read()
+        return int(stat.rsplit(")", 1)[1].split()[1])
+    except Exception:
+        return None
+
+
+def _proc_cwd(pid: int) -> str:
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except Exception:
+        return ""
+
+
+def _child_pids(pid: int) -> list[int]:
+    out: list[int] = []
+    try:
+        names = os.listdir("/proc")
+    except Exception:
+        return out
+    for name in names:
+        if name.isdigit() and _proc_ppid(int(name)) == pid:
+            out.append(int(name))
+    return sorted(out)
+
+
+def _git_origin(root: str) -> str | None:
+    """root/.git/config の origin URL (git コマンドは使わない)."""
+    try:
+        with open(os.path.join(root, ".git", "config"), encoding="utf-8",
+                  errors="ignore") as f:
+            text = f.read()
+    except Exception:
+        return None
+    m = re.search(r'\[remote "origin"\][^\[]*?url\s*=\s*(\S+)', text, re.DOTALL)
+    return m.group(1) if m else None
+
+
+def _git_head(root: str) -> str | None:
+    """root の HEAD のコミット (短縮)。packed-refs も見る."""
+    try:
+        with open(os.path.join(root, ".git", "HEAD"), encoding="ascii",
+                  errors="ignore") as f:
+            head = f.read().strip()
+        if head.startswith("ref: "):
+            ref = head[5:]
+            path = os.path.join(root, ".git", ref)
+            if os.path.exists(path):
+                with open(path, encoding="ascii", errors="ignore") as f:
+                    return f.read().strip()[:7]
+            with open(os.path.join(root, ".git", "packed-refs"), encoding="ascii",
+                      errors="ignore") as f:
+                for line in f:
+                    if line.rstrip().endswith(" " + ref):
+                        return line.split()[0][:7]
+            return None
+        return head[:7] or None
+    except Exception:
+        return None
+
+
+def strata_family(pid: int | None) -> dict:
+    """pid が Strata 系の server.py なら {family, version, root, engine_pid, ...}.
+
+    違えば {}。例外は出さない。
+    """
+    if not pid:
+        return {}
+    argv = _proc_argv(pid)
+    script = next((a for a in argv if a.replace("\\", "/").endswith("serve/server.py")),
+                  None)
+    if not script:
+        return {}
+    cwd = _proc_cwd(pid)
+    script = os.path.normpath(os.path.join(cwd, script))
+    root = os.path.dirname(os.path.dirname(script))
+    out: dict = {"root": root}
+    origin = _git_origin(root)
+    if origin:
+        out["origin"] = origin
+    hay = f"{origin or ''} {os.path.basename(root)}".lower()
+    for key, label in _STRATA_FAMILY:
+        if key in hay:
+            out["family"] = label
+            break
+    else:
+        out["family"] = "Strata系"
+    try:
+        with open(os.path.join(root, "VERSION"), encoding="utf-8") as f:
+            ver = f.read().strip()
+        if ver:
+            out["version"] = ver
+    except Exception:
+        pass
+    head = _git_head(root)
+    if head:
+        out["commit"] = head
+    # --config の JSON: エンジンの実行ファイル・pack (= モデル)・コンテキスト
+    cfg_path = None
+    for i, a in enumerate(argv):
+        if a == "--config" and i + 1 < len(argv):
+            cfg_path = argv[i + 1]
+        elif a.startswith("--config="):
+            cfg_path = a.split("=", 1)[1]
+    if cfg_path:
+        cfg_path = os.path.normpath(os.path.join(cwd, cfg_path))
+        out["config"] = cfg_path
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                rc = json.load(f)
+        except Exception:
+            rc = {}
+        if isinstance(rc, dict):
+            args = [str(a) for a in rc.get("args") or []]
+            for flag in ("--glm-pack", "--pack", "--model", "-m"):
+                if flag in args and args.index(flag) + 1 < len(args):
+                    out["model_path"] = args[args.index(flag) + 1]
+                    break
+            if "--max-context" in args and args.index("--max-context") + 1 < len(args):
+                n = _int(args[args.index("--max-context") + 1])
+                if n:
+                    out["n_ctx"] = n
+            if rc.get("exe"):
+                out["engine_exe"] = str(rc["exe"])
+            if rc.get("model_name"):
+                out["model_name"] = str(rc["model_name"])
+    # エンジン (子プロセス)。計算バックエンドはこちらのライブラリで判る
+    exe_base = os.path.basename(out.get("engine_exe") or "strata")
+    for c in _child_pids(pid):
+        if os.path.basename(_proc_exe(c) or "") == exe_base:
+            out["engine_pid"] = c
+            break
+    return out
+
+
+def _family_label(fam: dict) -> str:
+    """'Abyss 1.1.0 (2b68887)' のような表示."""
+    s = str(fam.get("family") or "Strata系")
+    if fam.get("version"):
+        s += f" {fam['version']}"
+    if fam.get("commit"):
+        s += f" ({fam['commit']})"
+    return s
 
 
 def _proc_exe(pid: int) -> str | None:
@@ -899,6 +1115,36 @@ def sampler_defaults(props: dict | None) -> dict:
     return out
 
 
+def _quant_of(path) -> str | None:
+    """パス (ggufファイル名 / pack のフォルダ) に入っている量子化名."""
+    m = re.search(r"(IQ\d[A-Z_]*|Q\d[A-Z0-9_]*|F16|BF16|F32)", str(path))
+    return m.group(1) if m else None
+
+
+def health_family(health) -> dict:
+    """/health の応答から Strata 系のサーバを判別する ({family, version} / 違えば {}).
+
+    - Strata: ``"service": "strata"``
+    - Abyss (v1.1.1 から): ``"service": "abyss"`` と ``version``
+    - Maya: service を出さないが、``version`` と ``mcp_tools`` を返すのは Maya の形
+      (Abyss v1.1.0 以前も同じ形なので、そこはプロセス側の判別で補う)
+    """
+    if not isinstance(health, dict):
+        return {}
+    service = str(health.get("service") or "").lower()
+    out: dict = {}
+    if service in ("strata", "abyss", "maya"):
+        out["family"] = {"strata": "Strata", "abyss": "Abyss", "maya": "Maya"}[service]
+    elif not service and "version" in health and "mcp_tools" in health:
+        out["family"] = "Maya"
+        out["guessed"] = True
+    else:
+        return {}
+    if health.get("version"):
+        out["version"] = str(health["version"])
+    return out
+
+
 def _backend_openai(base_url: str, model: str | None) -> dict:
     """OpenAI互換サーバ. ローカル (llama.cpp / LM Studio 等) なら /props も見る."""
     local = _is_local_url(base_url)
@@ -918,6 +1164,12 @@ def _backend_openai(base_url: str, model: str | None) -> dict:
     if not isinstance(props, dict):
         return b
     b["kind"] = "llama.cpp"
+    # Strata 系は /health で名乗る (llama.cpp 互換の /props では区別できない)
+    fam = health_family(_get_json(f"{root}/health"))
+    if fam:
+        b["kind"] = fam["family"]
+        if fam.get("version"):
+            b["server_version"] = f"{fam['family']} {fam['version']}"
     gen = props.get("default_generation_settings") or {}
     n_ctx = _int(gen.get("n_ctx") or props.get("n_ctx"))
     if n_ctx:
@@ -935,9 +1187,9 @@ def _backend_openai(base_url: str, model: str | None) -> dict:
     if path:
         b["model_path"] = str(path)
         # ggufファイル名に量子化が入っている (例: ...-Q4_K_M.gguf)
-        m = re.search(r"(IQ\d[A-Z_]*|Q\d[A-Z0-9_]*|F16|BF16|F32)", str(path))
-        if m:
-            b["quantization"] = m.group(1)
+        q = _quant_of(path)
+        if q:
+            b["quantization"] = q
         # 同名ファイルを差し替えて再測定する運用に備えて指紋を残す
         info = model_file_info(path)
         if info:
@@ -1025,13 +1277,38 @@ def collect(cfg: dict | None = None, served_model: str | None = None) -> dict:
             # config に runtime: を書いていればそれを正とし、検出は裏付けに回す
             # (同じポートでビルドを差し替える運用では書き忘れが起きるため、
             #  検出値と食い違ったら両方を残して気付けるようにする)。
-            runtime = detect_runtime(pid)
+            # Strata / Maya / Abyss: server.py のフォルダから種類・版・pack を読み、
+            # 計算バックエンドは子プロセスのエンジン (build/strata) で判定する
+            # (python の server.py 自身は CUDA を読み込まないので "CPU" に見える)
+            fam = strata_family(pid)
+            if fam:
+                # 種類は /health の名乗りを正とする (フォルダ名からの推定は補助)。
+                # Maya の推定 (service なし) はフォルダ側の判別があればそちらを採る
+                hk = backend.get("kind")
+                if hk in ("Strata", "Abyss", "Maya") and not (
+                        hk == "Maya" and fam.get("family") not in (None, "Maya", "Strata系")):
+                    if fam.get("family") not in (None, hk, "Strata系"):
+                        fam["folder_family"] = fam["family"]
+                    fam["family"] = hk
+                backend["kind"] = fam.get("family") or "Strata系"
+                backend["server_version"] = _family_label(fam)
+                backend["strata_family"] = fam
+                if fam.get("model_path"):
+                    backend["model_path"] = fam["model_path"]
+                    backend.pop("model_file", None)   # /props の "pack/full" の指紋
+                    q = _quant_of(fam["model_path"])
+                    if q:
+                        backend["quantization"] = q
+                if fam.get("n_ctx"):
+                    backend.setdefault("n_ctx", fam["n_ctx"])
+            runtime = detect_runtime((fam or {}).get("engine_pid") or pid)
             declared = cfg.get("runtime")
             if declared:
                 detected = runtime.get("compute")
                 runtime["compute"] = str(declared)
                 runtime["source"] = "config"
-                if detected and detected.lower() != str(declared).lower():
+                # "Strata/CUDA" と検出値 "CUDA" は一致とみなす
+                if detected and detected.lower() not in str(declared).lower():
                     runtime["detected"] = detected
                     runtime["mismatch"] = True
             elif runtime.get("compute"):
@@ -1050,12 +1327,15 @@ def collect(cfg: dict | None = None, served_model: str | None = None) -> dict:
                 # 顔を出すことがあり、それを推論GPUと誤認すると「Radeonで動いて
                 # いるのに RTX 3090」と出る。CUDA以外では紐づけを採用しない。
                 compute = (runtime.get("compute") or "").lower()
-                if compute and not compute.startswith("cuda"):
+                if compute and "cuda" not in compute:
                     usage.pop("inference", None)
                     usage["note"] = (
                         f"計算バックエンドが {runtime.get('compute')} のため、"
                         "nvidia-smi 由来の推論GPU判定は採用していない"
                     )
+                inf = usage.get("inference") or {}
+                if fam and inf.get("pid") and inf.get("pid") == fam.get("engine_pid"):
+                    inf.pop("uncertain", None)   # Strata 系のエンジン (server.py の子) と確認できた
                 backend["gpu_usage"] = usage
         return {
             "execution": execution,
