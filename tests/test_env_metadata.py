@@ -963,3 +963,198 @@ def test_compare_warns_on_mixed_environments():
     # 環境未記録 (旧results) も検出する
     md3 = render_comparison([_run("a", local), _run("b", None)])
     assert "記録されていない" in md3
+
+
+# ── Strata 系 (Strata / Maya / Abyss) の判別 ──────────────────────────────
+
+
+def test_find_server_pid_does_not_fall_back_to_another_port(monkeypatch):
+    """ポート指定でどれも一致しなければ None (別ポートの ollama を返さない)."""
+    monkeypatch.setattr(envinfo, "_listening_pids", lambda port: [])
+    monkeypatch.setattr(envinfo, "_proc_cmdlines", lambda: [
+        (1464, "/usr/local/bin/ollama serve"),
+    ])
+    assert envinfo.find_server_pid(8082) is None
+    assert envinfo.find_server_pid(None) == 1464
+
+
+def test_find_server_pid_prefers_the_listening_process(monkeypatch):
+    """python の server.py (名前で拾えない) もポートの LISTEN から掴む."""
+    monkeypatch.setattr(envinfo, "_listening_pids", lambda port: [777] if port == 8082 else [])
+    monkeypatch.setattr(envinfo, "_proc_cmdlines", lambda: [
+        (1464, "/usr/local/bin/ollama serve"),
+    ])
+    assert envinfo.find_server_pid(8082) == 777
+
+
+def _fake_strata_tree(tmp_path, folder, origin, version, model="UD-Q2_K_XL/pack-dsv4"):
+    root = tmp_path / folder
+    (root / "serve").mkdir(parents=True)
+    (root / "serve" / "server.py").write_text("")
+    if origin is not None:
+        (root / ".git").mkdir()
+        (root / ".git" / "config").write_text(
+            f'[core]\n\tbare = false\n[remote "origin"]\n\turl = {origin}\n'
+            '\tfetch = +refs/heads/*:refs/remotes/origin/*\n')
+        (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+        (root / ".git" / "refs" / "heads").mkdir(parents=True)
+        (root / ".git" / "refs" / "heads" / "main").write_text("2b68887abcdef\n")
+    if version is not None:
+        (root / "VERSION").write_text(version + "\n")
+    cfg = root / "run.json"
+    cfg.write_text(json.dumps({
+        "exe": str(root / "build" / "strata"),
+        "args": ["--glm-pack", f"/data/{model}", "--max-context", "65536"],
+        "model_name": "deepseek-v4-flash",
+    }))
+    return root, cfg
+
+
+@pytest.mark.parametrize("folder,origin,version,family", [
+    ("Abyss", "git@github.com:zephel01/Abyss.git", "1.1.0", "Abyss"),
+    ("Maya", "https://github.com/mw00/project-maya.git", "1.0.24", "Maya"),
+    ("Strata", "https://github.com/Niko1221/Strata.git", None, "Strata"),
+    ("Maya-DeepSeek", None, None, "Maya"),          # git が無ければフォルダ名で
+])
+def test_strata_family_from_server_folder(monkeypatch, tmp_path, folder, origin, version, family):
+    root, cfg = _fake_strata_tree(tmp_path, folder, origin, version)
+    monkeypatch.setattr(envinfo, "_proc_argv", lambda pid: [
+        str(root / ".venv/bin/python"), "serve/server.py", "--engine", "strata",
+        "--config", str(cfg), "--port", "8082"])
+    monkeypatch.setattr(envinfo, "_proc_cwd", lambda pid: str(root))
+    monkeypatch.setattr(envinfo, "_child_pids", lambda pid: [4242])
+    monkeypatch.setattr(envinfo, "_proc_exe",
+                        lambda pid: str(root / "build" / "strata") if pid == 4242 else None)
+    fam = envinfo.strata_family(1000)
+    assert fam["family"] == family
+    assert fam["root"] == str(root)
+    assert fam["engine_pid"] == 4242
+    assert fam["model_path"] == "/data/UD-Q2_K_XL/pack-dsv4"
+    assert fam["n_ctx"] == 65536
+    assert fam.get("version") == version
+    if origin is not None:
+        assert fam["commit"] == "2b68887"
+        assert envinfo._family_label(fam).startswith(f"{family} ")
+
+
+def test_strata_family_ignores_other_servers(monkeypatch):
+    monkeypatch.setattr(envinfo, "_proc_argv", lambda pid: [
+        "/opt/llama.cpp/build/bin/llama-server", "-m", "x.gguf", "--port", "8082"])
+    assert envinfo.strata_family(1000) == {}
+    assert envinfo.strata_family(None) == {}
+
+
+def test_collect_labels_strata_family_and_uses_the_engine_process(monkeypatch):
+    """kind は Abyss、モデルは pack、計算バックエンドはエンジン (子) のもの.
+
+    "Strata/CUDA" (config) と検出値 "CUDA" は不一致にしない。
+    """
+    fam = {"family": "Abyss", "version": "1.1.0", "commit": "2b68887",
+           "model_path": "/data/UD-Q2_K_XL/pack-dsv4", "n_ctx": 65536,
+           "engine_pid": 4242}
+    seen = {}
+
+    def runtime(pid):
+        seen["pid"] = pid
+        return {"compute": "CUDA", "evidence": ["libcudart.so.13"]}
+
+    monkeypatch.setattr(envinfo, "find_server_pid", lambda port: 1000)
+    monkeypatch.setattr(envinfo, "strata_family", lambda pid: dict(fam))
+    monkeypatch.setattr(envinfo, "detect_runtime", runtime)
+    monkeypatch.setattr(envinfo, "collect_launch", lambda pid, gpus=None: {})
+    monkeypatch.setattr(envinfo, "collect_gpu_usage", lambda: {
+        "inference": {"pid": 4242, "process": "strata", "vram_total_gb": 30.6,
+                      "gpus": [], "uncertain": True}})
+    monkeypatch.setattr(envinfo, "_backend_openai", lambda url, model: {
+        "kind": "llama.cpp", "base_url": url, "model_path": "pack/full",
+        "model_file": {"path": "pack/full"}})
+    cfg = {"type": "openai", "base_url": "http://localhost:8082/v1",
+           "runtime": "Strata/CUDA"}
+    b = envinfo.collect(cfg, "deepseek-v4-flash")["backend"]
+    assert b["kind"] == "Abyss"
+    assert b["server_version"] == "Abyss 1.1.0 (2b68887)"
+    assert b["model_path"] == "/data/UD-Q2_K_XL/pack-dsv4" and "model_file" not in b
+    assert b["quantization"] == "Q2_K_XL"
+    assert seen["pid"] == 4242
+    assert b["runtime"]["compute"] == "Strata/CUDA" and not b["runtime"].get("mismatch")
+    assert "uncertain" not in b["gpu_usage"]["inference"]
+    assert "note" not in b["gpu_usage"]          # CUDA なので GPU の紐づけは捨てない
+
+
+# ── /health での判別 ─────────────────────────────────────────────────────
+
+_STRATA_HEALTH = {"status": "ok", "max_context": 131072, "model": "qwen3.8-flash-next-iq3_s",
+                  "images": False, "api_key": False, "loaded": True, "service": "strata"}
+_MAYA_HEALTH = {"status": "ok", "max_context": 65536, "model": "glm-5.3-flash", "images": False,
+                "api_key": False, "defaults": {"temperature": 1.0}, "version": "1.0.24",
+                "mcp_tools": False}
+_ABYSS_HEALTH = {**_MAYA_HEALTH, "model": "deepseek-v4-flash", "version": "1.1.1",
+                 "service": "abyss"}
+
+
+@pytest.mark.parametrize("health,family,version", [
+    (_STRATA_HEALTH, "Strata", None),
+    (_ABYSS_HEALTH, "Abyss", "1.1.1"),
+    (_MAYA_HEALTH, "Maya", "1.0.24"),          # service なし + version/mcp_tools = Maya の形
+    ({"status": "ok"}, None, None),            # llama.cpp の /health
+    (None, None, None),
+])
+def test_health_family(health, family, version):
+    fam = envinfo.health_family(health)
+    assert fam.get("family") == family
+    assert fam.get("version") == version
+
+
+class _HealthHandler(_Handler):
+    health: dict = {}
+
+    def do_GET(self):  # noqa: N802
+        if self.path == "/health":
+            b = json.dumps(self.health).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+            return
+        super().do_GET()
+
+
+@pytest.mark.parametrize("health,kind", [
+    (_ABYSS_HEALTH, "Abyss"), (_MAYA_HEALTH, "Maya"), (_STRATA_HEALTH, "Strata"),
+    ({"status": "ok"}, "llama.cpp"),
+])
+def test_backend_kind_from_health(health, kind):
+    handler = type("H", (_HealthHandler,), {"health": health})
+    srv = HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        b = envinfo.collect_backend(
+            {"type": "openai", "base_url": f"http://127.0.0.1:{srv.server_port}/v1", "model": "auto"},
+            served_model="m")
+    finally:
+        srv.shutdown()
+    assert b["kind"] == kind
+    if health.get("version"):
+        assert b["server_version"] == f"{kind} {health['version']}"
+
+
+def test_folder_family_corrects_a_maya_guess_from_old_abyss(monkeypatch):
+    """Abyss v1.1.0 以前の /health は Maya と同じ形: フォルダ側の判別 (Abyss) を採る."""
+    monkeypatch.setattr(envinfo, "find_server_pid", lambda port: 1000)
+    monkeypatch.setattr(envinfo, "strata_family",
+                        lambda pid: {"family": "Abyss", "version": "1.1.0", "engine_pid": 4242})
+    monkeypatch.setattr(envinfo, "detect_runtime", lambda pid: {"compute": "CUDA"})
+    monkeypatch.setattr(envinfo, "collect_launch", lambda pid, gpus=None: {})
+    monkeypatch.setattr(envinfo, "collect_gpu_usage", lambda: {})
+    monkeypatch.setattr(envinfo, "_backend_openai",
+                        lambda url, model: {"kind": "Maya", "base_url": url})
+    b = envinfo.collect({"type": "openai", "base_url": "http://localhost:8082/v1"})["backend"]
+    assert b["kind"] == "Abyss"
+    # /health が名乗った種類はフォルダ名より優先
+    monkeypatch.setattr(envinfo, "strata_family",
+                        lambda pid: {"family": "Maya", "engine_pid": 4242})
+    monkeypatch.setattr(envinfo, "_backend_openai",
+                        lambda url, model: {"kind": "Abyss", "base_url": url})
+    b = envinfo.collect({"type": "openai", "base_url": "http://localhost:8082/v1"})["backend"]
+    assert b["kind"] == "Abyss" and b["strata_family"]["folder_family"] == "Maya"
