@@ -1,7 +1,7 @@
-"""radonによる複雑度・保守性スコア.
+"""Complexity and maintainability scoring using radon.
 
-ベース: Maintainability Index (0-100)
-減点: 変更ファイル中の最悪Cyclomatic ComplexityランクによるCCペナルティ
+Base: Maintainability Index (0-100)
+Penalty: CC penalty based on the worst Cyclomatic Complexity rank in modified files
 """
 
 from __future__ import annotations
@@ -29,11 +29,11 @@ def complexity_score(
             mi_values.append(mi_visit(code, multi=True))
             for block in cc_visit(code):
                 rank = cc_rank(block.complexity)
-                if rank > worst_rank:  # A < B < ... < F (文字列比較で成立)
+                if rank > worst_rank:  # A < B < ... < F (valid string comparison)
                     worst_rank = rank
                     worst_func = f"{f}:{block.name} (CC={block.complexity})"
         except SyntaxError:
-            # 構文エラーのコードは最低評価 (機能テストでも落ちるはず)
+            # Code with syntax errors receives the lowest score (should fail functional tests too)
             return 0.0, {"error": f"syntax error in {f}"}
 
     mi = sum(mi_values) / len(mi_values) if mi_values else 100.0

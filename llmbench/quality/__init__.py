@@ -1,4 +1,4 @@
-"""品質評価レイヤー: Ruff / radon / LLMレビュー / SonarQube(任意)."""
+"""Quality evaluation layer: Ruff / radon / LLM review / SonarQube (optional)."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from .sonar import sonar_score
 
 @dataclass
 class QualityResult:
-    score: float                       # 0-100 (重み付き合成)
-    components: dict = field(default_factory=dict)   # 各レイヤーの詳細
+    score: float                       # 0-100 (weighted synthesis)
+    components: dict = field(default_factory=dict)   # Details for each layer
 
 
 def evaluate_quality(
@@ -24,9 +24,9 @@ def evaluate_quality(
     issue_text: str = "",
     reviewer_client=None,
 ) -> QualityResult:
-    """変更ファイルに対して有効な品質レイヤーを実行し合成スコアを返す.
+    """Runs active quality layers on changed files and returns a composite score.
 
-    無効/失敗したレイヤーは重みを除外して再正規化する。
+    Disabled/failed layers are excluded and weights are re-normalized.
     """
     components: dict = {}
     weighted: list[tuple[float, float]] = []  # (score, weight)
@@ -38,7 +38,7 @@ def evaluate_quality(
             return
         try:
             score, detail = fn(cfg)
-        except Exception as e:  # レイヤー単体の失敗で全体を落とさない
+        except Exception as e:  # Individual layer failure does not fail the entire execution
             components[name] = {"enabled": True, "error": str(e)}
             return
         if score is None:

@@ -1,4 +1,4 @@
-"""機能正確性評価: patch適用 → pytest → resolved判定."""
+"""Functional accuracy evaluation: apply patch -> run pytest -> determine resolved status."""
 
 from __future__ import annotations
 
@@ -24,10 +24,10 @@ def evaluate_functional(
     timeout: int = 120,
     keep_workspace: bool = False,
 ) -> tuple[FunctionalResult, Path | None]:
-    """一時コピーにpatchを適用しテストを実行する.
+    """Applies a patch to a temporary copy and runs tests.
 
-    戻り値: (結果, workspace) — keep_workspace=True時は品質評価用に
-    workspaceを残す (呼び出し側がcleanupする)。
+    Returns: (result, workspace) — when keep_workspace=True, preserves
+    workspace for quality evaluation (caller responsible for cleanup).
     """
     if not patch.parse_ok:
         return FunctionalResult(

@@ -1,7 +1,8 @@
-"""ベンチマーク実行オーケストレータ.
+"""Benchmark execution orchestrator.
 
-単一試行 (runs=1) では従来通り。runs>1 のときは各タスクをN回サンプリングし、
-成功率・pass@k などの信頼性指標を集計する (「実際どれくらい使えるか」の核)。
+For single trials (runs=1), behavior is standard. When runs>1, each task is sampled
+N times to aggregate reliability metrics such as success rate and pass@k (the core of
+"how usable it actually is").
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from . import usability
 from .clients import LLMClient, create_client
 from .clients.mock import MockClient
 from .clients.ollama import (
-    DEFAULT_OLLAMA_HOST,  # noqa: F401  (後方互換のため残置)
+    DEFAULT_OLLAMA_HOST,  # noqa: F401  (retained for backward compatibility)
     default_ollama_host,
     list_ollama_models,
 )
@@ -27,13 +28,13 @@ from .scoring import combined_score, pass_at_k
 from .tasks import Task, load_tasks
 
 
-# results.json には載せない大きめのフィールド (artifactsとして別途ファイル保存する)
+# Large fields excluded from results.json (saved separately as artifact files)
 ARTIFACT_FIELDS = ("raw_output", "parsed_files", "test_output")
 
 
 @dataclass
 class Attempt:
-    """1回の試行の評価結果."""
+    """Evaluation result for a single attempt."""
 
     resolved: bool = False
     quality_score: float = 0.0
@@ -65,23 +66,23 @@ class TaskResult:
     fail_reason: str = ""
     quality_components: dict = field(default_factory=dict)
 
-    # --- 信頼性 (pass@k) ---
+    # --- Reliability (pass@k) ---
     runs: int = 1
     n_pass: int = 0
     success_rate: float = 0.0          # n_pass / runs
     pass_at_1: float = 0.0
     pass_at_k: float = 0.0
-    attempts: list = field(default_factory=list)   # 各試行の要約 (軽量)
+    attempts: list = field(default_factory=list)   # Summary for each attempt (lightweight)
 
-    # --- usability判定 ---
+    # --- Usability Assessment ---
     usability_tier: str = ""
 
-    # --- 生成物 (artifacts / 代表試行) ---
+    # --- Artifacts (representative attempt) ---
     parse_ok: bool = False
     parse_error: str = ""
-    parsed_files: dict = field(default_factory=dict)   # 相対パス -> 生成コード
-    raw_output: str = ""                                # LLMの生出力
-    test_output: str = ""                               # pytestの出力
+    parsed_files: dict = field(default_factory=dict)   # Relative path -> generated code
+    raw_output: str = ""                                # Raw LLM output
+    test_output: str = ""                               # Pytest output
 
     @property
     def changed_files(self) -> list[str]:
@@ -94,7 +95,7 @@ class RunResult:
     issue_lang: str
     results: list[TaskResult] = field(default_factory=list)
     runs: int = 1
-    artifacts_dirname: str = ""   # save_run時に生成物ディレクトリ名が入る
+    artifacts_dirname: str = ""   # Populated with artifact directory name during save_run
 
     @property
     def multi_run(self) -> bool:
@@ -120,14 +121,14 @@ class RunResult:
 
     @property
     def solved_any_rate(self) -> float:
-        """N回中1回でも成功したタスクの割合 (再試行込みで到達可能か)."""
+        """Ratio of tasks solved at least once across N trials (reachability with retries)."""
         if not self.results:
             return 0.0
         return sum(1 for r in self.results if r.n_pass > 0) / len(self.results)
 
     @property
     def avg_quality_resolved(self) -> float:
-        """resolvedになったタスクのみの品質平均."""
+        """Average quality score only for resolved tasks."""
         rs = [r.quality_score for r in self.results if r.resolved]
         return sum(rs) / len(rs) if rs else 0.0
 
@@ -153,9 +154,9 @@ class BenchmarkRunner:
         )
 
     def ollama_host(self) -> str:
-        """Ollama接続先の優先順:
+        """Priority order for Ollama connection host:
         --ollama-host / run.ollama_host > env OLLAMA_HOST
-        > configのollamaモデル base_url > http://localhost:11434
+        > base_url of ollama model in config > http://localhost:11434
         """
         h = self.run_cfg.get("ollama_host")
         if h:
@@ -169,7 +170,7 @@ class BenchmarkRunner:
         return default_ollama_host()
 
     def _ollama_template(self) -> dict:
-        """configにある最初のollamaモデルから共通パラメータを借用する."""
+        """Borrows common parameters from the first Ollama model in config."""
         for v in self.config.get("models", {}).values():
             if v.get("type") == "ollama":
                 return {
@@ -184,16 +185,16 @@ class BenchmarkRunner:
         client_type: str | None = None,
         base_url: str | None = None,
     ) -> dict:
-        """モデル名を接続設定(dict)に解決する.
+        """Resolves model name into connection settings (dict).
 
-        優先順:
-          1. client_type 指定あり → config を経由せず ad-hoc に合成
-             (--client-type openai --base-url http://... で llama.cpp 直結、
-              --client-type multiagent で CodeRouter 直結など)
-          2. config の models: キーに一致 → その設定
-             (base_url 指定があれば上書き)
-          3. Ollama 稼働モデル名 → ollama 設定を自動合成
-             (base_url 指定があればそれを Ollama ホストとして使用)
+        Priority order:
+          1. client_type specified → Synthesize ad-hoc without consulting config
+             (--client-type openai --base-url http://... direct to llama.cpp,
+              --client-type multiagent direct to CodeRouter, etc.)
+          2. Matches models: key in config → Use defined settings
+             (Overridden if base_url is specified)
+          3. Running Ollama model name → Automatically synthesize Ollama settings
+             (Uses base_url as Ollama host if specified)
         """
         models = self.config.get("models", {})
         if client_type:
@@ -205,8 +206,8 @@ class BenchmarkRunner:
                 cfg.setdefault("base_url", base_url or self.ollama_host())
                 cfg = {**self._ollama_template(), **cfg}
             if name not in models:
-                # openai型で名前がconfig未定義なら auto 扱い
-                # (auto/実モデル名どちらでも可)
+                # Treat as auto if openai type and name is missing in config
+                # (Accepts either auto or actual model name)
                 cfg.setdefault("model", name)
             return cfg
         if name in models:
@@ -217,21 +218,21 @@ class BenchmarkRunner:
         host = base_url or self.ollama_host()
         try:
             available = list_ollama_models(host)
-        except Exception as e:  # Ollama未起動など
+        except Exception as e:  # Ollama not running, etc.
             raise ValueError(
-                f"モデル {name!r} はconfig未定義で、"
-                f"Ollama ({host}) にも接続できません: {e}\n"
-                f"  config定義: {list(models)}\n"
-                f"  (Ollama以外に繋ぐ場合は --client-type openai|multiagent "
-                f"と --base-url を指定)"
+                f"Model {name!r} is undefined in config, "
+                f"and cannot connect to Ollama ({host}): {e}\n"
+                f"  Defined in config: {list(models)}\n"
+                f"  (Specify --client-type openai|multiagent "
+                f"and --base-url when connecting to backends other than Ollama)"
             ) from e
         if name in available:
             return {**self._ollama_template(), "type": "ollama",
                     "base_url": host, "model": name}
         raise ValueError(
-            f"モデル {name!r} はconfig未定義で、"
-            f"Ollama ({host}) にも未インストールです。\n"
-            f"  config定義: {list(models)}\n  Ollama稼働: {available}"
+            f"Model {name!r} is undefined in config, "
+            f"and not installed in Ollama ({host}).\n"
+            f"  Defined in config: {list(models)}\n  Running in Ollama: {available}"
         )
 
     def _make_reviewer(self) -> LLMClient | None:
@@ -241,21 +242,21 @@ class BenchmarkRunner:
         name = cfg.get("reviewer_model")
         if not name:
             raise ValueError(
-                "quality.llm_review.enabled ですが reviewer_model が未指定です"
+                "quality.llm_review.enabled is true, but reviewer_model is unspecified"
             )
         try:
-            # メインモデルと同じ解決経路 (config > Ollama自動解決)
+            # Same resolution path as main model (config > Ollama auto-resolution)
             return create_client(name, self.resolve_model(name))
         except ValueError as e:
             raise ValueError(
-                f"reviewer_model {name!r} を解決できません: {e}"
+                f"Failed to resolve reviewer_model {name!r}: {e}"
             ) from e
 
     def _make_judge(self) -> tuple[LLMClient | None, int]:
-        """judge grader 用の採点モデルを構築する (quality.judge).
+        """Constructs grading model for judge grader (quality.judge).
 
-        未設定・無効なら (None, 1)。この場合 judge grader は hard_constraints のみで
-        決定的に判定する (validate を緑に保つ)。
+        If unconfigured or disabled, returns (None, 1). In this case, judge grader evaluates
+        deterministically using only hard_constraints (keeping validate passing green).
         """
         cfg = self.quality_cfg.get("judge", {})
         seeds = max(1, int(cfg.get("seeds", 1)))
@@ -263,11 +264,11 @@ class BenchmarkRunner:
             return None, seeds
         name = cfg.get("judge_model")
         if not name:
-            raise ValueError("quality.judge.enabled ですが judge_model が未指定です")
+            raise ValueError("quality.judge.enabled is true, but judge_model is unspecified")
         try:
             return create_client(name, self.resolve_model(name)), seeds
         except ValueError as e:
-            raise ValueError(f"judge_model {name!r} を解決できません: {e}") from e
+            raise ValueError(f"Failed to resolve judge_model {name!r}: {e}") from e
 
     def run(
         self,
@@ -298,20 +299,20 @@ class BenchmarkRunner:
             concurrency if concurrency is not None
             else self.run_cfg.get("concurrency", 1)
         ))
-        # 複数試行時は多様性のためサンプリング温度を上げる
+        # Increase sampling temperature for diversity during multiple trials
         if runs > 1:
             st = sample_temp if sample_temp is not None else self.run_cfg.get(
                 "sample_temp", 0.8
             )
             client.temperature = float(st)
 
-        # ラベル: --label > サーバ自動検出(model:auto) > config キー名
+        # Label: --label > server auto-detected (model:auto) > config key name
         served = getattr(client, "served_model_name", None)
         if label:
             run_label = label
         elif served:
             run_label = _label_from_model(served)
-            progress(f"検出モデル: {served} (config未編集で自動採用)")
+            progress(f"Detected model: {served} (auto-adopted without config edit)")
         else:
             run_label = model_name
 
@@ -323,7 +324,7 @@ class BenchmarkRunner:
                 f"[{i}/{len(tasks)}] {task.task_id} ({task.difficulty}) {task.title}"
                 + (f"  ×{runs}" if runs > 1 else "")
             )
-            # 性能制約タスクは個別 perf_timeout を優先 (無ければ config 既定)
+            # Performance-constrained tasks prioritize individual perf_timeout (defaults to config otherwise)
             task_timeout = task.perf_timeout or timeout
             tr = self._run_task(
                 client, reviewer, judge, judge_seeds,
@@ -343,7 +344,7 @@ class BenchmarkRunner:
         ctx: GradeCtx,
         retries: int,
     ) -> Attempt:
-        """1回分の 生成→採点 を評価する (grader 差し替え可)."""
+        """Evaluates a single generation -> grading pass (supports interchangeable graders)."""
         at = Attempt()
         total_latency = 0.0
         gen = None
@@ -351,7 +352,7 @@ class BenchmarkRunner:
         for _ in range(retries + 1):
             try:
                 gen = client.generate(system, user_prompt)
-            except Exception as e:  # 生成失敗はその試行を失敗扱い
+            except Exception as e:  # Generation failures mark attempt as failed
                 at.fail_reason = f"generation error: {e}"
                 return at
             total_latency += gen.latency_sec
@@ -396,7 +397,7 @@ class BenchmarkRunner:
         )
         if isinstance(client, MockClient):
             client.current_task = task
-            client.current_task_dir = task.dir   # 後方互換
+            client.current_task_dir = task.dir   # Backward compatibility
 
         grader = get_grader(task.grader)
         system, user_prompt = grader.build_prompt(task, lang)
@@ -414,9 +415,9 @@ class BenchmarkRunner:
                 client, grader, system, user_prompt, task, ctx, retries
             )
 
-        # 試行(runs)を並列実行する。LLM生成がボトルネックなので、サーバ側を
-        # `--parallel N -cb` で起動しておけば runs 本の生成が重なって時間短縮できる。
-        # MockClient は task_dir 状態を共有するため直列にフォールバックする。
+        # Runs trials in parallel. Since LLM generation is the bottleneck, starting the
+        # server with `--parallel N -cb` overlaps generation for N runs to reduce time.
+        # Fallback to sequential for MockClient as it shares task_dir state.
         conc = min(getattr(self, "_concurrency", 1), runs)
         if conc > 1 and not isinstance(client, MockClient):
             with ThreadPoolExecutor(max_workers=conc) as ex:
@@ -433,7 +434,7 @@ class BenchmarkRunner:
 def _aggregate_attempts(
     tr: TaskResult, attempts: list[Attempt], scoring_cfg: dict
 ) -> None:
-    """複数試行を集計し TaskResult を埋める. runs=1 なら従来値と一致する."""
+    """Aggregates multiple attempts to populate TaskResult. Matches legacy values when runs=1."""
     n = len(attempts)
     passed = [a for a in attempts if a.resolved]
     c = len(passed)
@@ -443,21 +444,21 @@ def _aggregate_attempts(
     tr.pass_at_1 = tr.success_rate
     tr.pass_at_k = round(pass_at_k(n, c, n), 3)
 
-    # 品質: 成功試行の平均 (1つも成功しなければ0)
+    # Quality: Average of successful attempts (0 if none succeed)
     tr.quality_score = round(sum(a.quality_score for a in passed) / c, 1) if c else 0.0
-    # 複合: 成功率でスケール (runs=1 なら resolved 0/1 と等価)
+    # Combined: Scaled by success rate (equivalent to resolved 0/1 when runs=1)
     tr.combined = combined_score(tr.success_rate, tr.quality_score, scoring_cfg)
-    # headline resolved は多数決 (runs=1 なら単一試行と一致)
+    # Headline resolved uses majority vote (matches single attempt when runs=1)
     tr.resolved = tr.success_rate >= 0.5
 
-    # 速度メトリクスは平均
+    # Speed metrics are averaged
     tr.latency_sec = round(sum(a.latency_sec for a in attempts) / n, 2) if n else 0.0
     tps = [a.tokens_per_sec for a in attempts if a.tokens_per_sec]
     tr.tokens_per_sec = round(sum(tps) / len(tps), 1) if tps else None
     toks = [a.completion_tokens for a in attempts if a.completion_tokens]
     tr.completion_tokens = round(sum(toks) / len(toks)) if toks else None
 
-    # 失敗理由
+    # Failure reason
     if c == n:
         tr.fail_reason = ""
     elif c == 0:
@@ -465,7 +466,7 @@ def _aggregate_attempts(
     else:
         tr.fail_reason = f"flaky {c}/{n} passed"
 
-    # 代表試行 (artifacts用): 最初の成功試行、なければ最初の試行
+    # Representative attempt (for artifacts): First successful attempt, or first attempt if none passed
     rep = passed[0] if passed else (attempts[0] if attempts else Attempt())
     tr.parse_ok = rep.parse_ok
     tr.parse_error = rep.parse_error
@@ -474,7 +475,7 @@ def _aggregate_attempts(
     tr.test_output = rep.test_output
     tr.quality_components = rep.quality_components
 
-    # 試行ごとの軽量サマリ (JSONに残す)
+    # Lightweight summary per attempt (saved in JSON)
     tr.attempts = [
         {
             "resolved": a.resolved,
@@ -487,7 +488,7 @@ def _aggregate_attempts(
 
 
 def _label_from_model(name: str) -> str:
-    """サーバ報告のモデル名を結果ラベル用に整える (パス/.gguf除去)."""
+    """Formats server-reported model name for result labels (strips paths/.gguf)."""
     name = name.rsplit("/", 1)[-1]
     if name.endswith(".gguf"):
         name = name[:-5]
@@ -495,37 +496,37 @@ def _label_from_model(name: str) -> str:
 
 
 def _snippet(text: str, n: int = 3) -> str:
-    """先頭n行を1行に潰したプレビュー."""
+    """Preview flattening first n lines into a single line."""
     lines = [ln for ln in text.strip().splitlines() if ln.strip()]
     head = " ⏎ ".join(lines[:n])
     return head[:120] + ("…" if len(head) > 120 else "")
 
 
 def _log_task(progress, tr: TaskResult) -> None:
-    """生成物の中身が分かるようにタスク結果をログ出力する."""
-    # 1行目: パース結果と生成ファイル
+    """Logs task results to clarify artifact contents."""
+    # Line 1: Parse results and generated files
     if tr.parse_ok:
-        files = ", ".join(tr.changed_files) or "(なし)"
+        files = ", ".join(tr.changed_files) or "(none)"
         progress(
-            f"    生成OK  files=[{files}]  "
+            f"    Gen OK  files=[{files}]  "
             f"{tr.completion_tokens or '?'}tok @ {tr.tokens_per_sec or '?'}tok/s"
         )
     else:
-        progress(f"    生成パース失敗: {tr.parse_error or '不明'}")
+        progress(f"    Gen parse failed: {tr.parse_error or 'Unknown'}")
         if tr.raw_output:
-            progress(f"      出力プレビュー: {_snippet(tr.raw_output)}")
+            progress(f"      Output preview: {_snippet(tr.raw_output)}")
 
-    # 2行目: 各生成ファイルの行数とコード冒頭 (動いてるか目視確認用)
+    # Line 2: Line count and head preview for each generated file (for visual inspection)
     for path, code in tr.parsed_files.items():
         nloc = len([ln for ln in code.splitlines() if ln.strip()])
         progress(f"      └ {path} ({nloc} LOC): {_snippet(code, 2)}")
 
-    # 3行目: 判定 (複数試行なら信頼性も)
+    # Line 3: Verdict (includes reliability metrics for multi-runs)
     status = "✅ RESOLVED" if tr.resolved else f"❌ FAILED ({tr.fail_reason})"
     tier = usability.TIER_LABEL.get(tr.usability_tier, "")
     if tr.runs > 1:
         progress(
-            f"    {status}  成功 {tr.n_pass}/{tr.runs} "
+            f"    {status}  Passed {tr.n_pass}/{tr.runs} "
             f"(pass@1={tr.pass_at_1:.2f} pass@{tr.runs}={tr.pass_at_k:.2f})  "
             f"quality={tr.quality_score:.0f} combined={tr.combined:.0f}  "
             f"[{tier}]  ({tr.latency_sec:.1f}s)"
@@ -535,7 +536,7 @@ def _log_task(progress, tr: TaskResult) -> None:
             f"    {status}  quality={tr.quality_score:.0f} "
             f"combined={tr.combined:.0f}  [{tier}]  ({tr.latency_sec:.1f}s)"
         )
-    # テスト失敗時はpytest出力の末尾を出す
+    # Print tail of pytest output on test failures
     if not tr.resolved and tr.test_output:
         tail = tr.test_output.strip().splitlines()[-3:]
         for ln in tail:
@@ -543,16 +544,16 @@ def _log_task(progress, tr: TaskResult) -> None:
 
 
 def _write_artifacts(run: RunResult, artifacts_dir: Path) -> None:
-    """タスクごとに生成物 (LLM生出力・生成コード・テスト出力) をファイル保存する."""
+    """Saves artifact files (raw LLM output, generated code, test output) per task."""
     for r in run.results:
         tdir = artifacts_dir / r.task_id
         tdir.mkdir(parents=True, exist_ok=True)
 
-        # LLMの生出力
+        # Raw LLM output
         if r.raw_output:
             (tdir / "llm_output.txt").write_text(r.raw_output, encoding="utf-8")
 
-        # 生成された各ファイル (実際に適用されるコードそのもの)
+        # Generated files (the actual applied code)
         code_dir = tdir / "generated"
         for rel, content in r.parsed_files.items():
             dest = code_dir / rel
@@ -561,13 +562,13 @@ def _write_artifacts(run: RunResult, artifacts_dir: Path) -> None:
                 content += "\n"
             dest.write_text(content, encoding="utf-8")
 
-        # pytest出力 (失敗原因の確認用)
+        # Pytest output (for inspecting failure reasons)
         if r.test_output:
             (tdir / "test_output.txt").write_text(r.test_output, encoding="utf-8")
 
 
 def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
-    """結果をJSON・Markdown・生成物として保存. (json_path, md_path) を返す."""
+    """Saves results as JSON, Markdown, and artifacts. Returns (json_path, md_path)."""
     from .report import render_markdown
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -576,18 +577,18 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
     md_path = output_dir / f"{stamp}_{run.model}_report.md"
     artifacts_dir = output_dir / f"{stamp}_{run.model}_artifacts"
 
-    # 生成物を別ディレクトリに保存
+    # Save artifacts in a separate directory
     _write_artifacts(run, artifacts_dir)
     run.artifacts_dirname = artifacts_dir.name
 
-    # results.json は集計・スコア中心に保つ (大きいartifactフィールドは除外)
+    # Keep results.json focused on aggregations and scores (excludes large artifact fields)
     def _lean(r: TaskResult) -> dict:
         d = asdict(r)
         for k in ARTIFACT_FIELDS:
             d.pop(k, None)
         return d
 
-    # 各 TaskResult に usability_tier は設定済みなので cfg は不要
+    # usability_tier is pre-configured on each TaskResult, so cfg is unnecessary
     overall, by_diff = usability.aggregate(run.results)
     summary = {
         "resolved_rate": round(run.resolved_rate, 3),
@@ -598,8 +599,8 @@ def save_run(run: RunResult, output_dir: Path) -> tuple[Path, Path]:
         "usability": {t: overall.get(t, 0) for t in usability.TIERS},
     }
     if run.multi_run:
-        # avg_success_rate=平均pass@1, solved_any_rate=N回中≥1成功
-        # avg_pass_at_k は k=runs のとき退化する点に注意
+        # avg_success_rate = average pass@1, solved_any_rate = solved ≥1 out of N trials
+        # Note that avg_pass_at_k degrades when k=runs
         summary["avg_success_rate"] = round(run.avg_success_rate, 3)
         summary["solved_any_rate"] = round(run.solved_any_rate, 3)
         summary["avg_pass_at_k"] = round(run.avg_pass_at_k, 3)

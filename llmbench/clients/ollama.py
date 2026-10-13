@@ -1,4 +1,4 @@
-"""Ollama ネイティブAPI クライアント."""
+"""Ollama native API client."""
 
 from __future__ import annotations
 
@@ -12,16 +12,16 @@ DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 
 
 def default_ollama_host() -> str:
-    """Ollama既定ホスト: 環境変数 OLLAMA_HOST > localhost:11434."""
+    """Default Ollama host: Environment variable OLLAMA_HOST > localhost:11434."""
     return os.environ.get("OLLAMA_HOST") or DEFAULT_OLLAMA_HOST
 
 
 def list_ollama_models(
     base_url: str = DEFAULT_OLLAMA_HOST, timeout: float = 5.0
 ) -> list[str]:
-    """Ollamaにインストール済みのモデル名一覧を返す (/api/tags).
+    """Returns a list of installed model names from Ollama (/api/tags).
 
-    接続できない場合は requests の例外を送出する (呼び出し側で握る)。
+    Raises requests exception if connection fails (handled by caller).
     """
     url = base_url.rstrip("/") + "/api/tags"
     resp = requests.get(url, timeout=timeout)
@@ -37,7 +37,7 @@ class OllamaClient(LLMClient):
         raw_url = expand_env(raw_url, where=f"models.{name}.base_url")
         self.base_url = str(raw_url).rstrip("/")
         self.model = require_cfg(
-            cfg, "model", name, hint="(例: model: qwen2.5-coder:32b)"
+            cfg, "model", name, hint="(e.g., model: qwen2.5-coder:32b)"
         )
 
     def _generate(self, system: str, user: str) -> GenerationResult:
@@ -59,7 +59,7 @@ class OllamaClient(LLMClient):
         )
         resp.raise_for_status()
         data = resp.json()
-        # Ollamaはeval_count/eval_durationを返す (durationはナノ秒)
+        # Ollama returns eval_count/eval_duration (duration in nanoseconds)
         completion_tokens = data.get("eval_count")
         eval_ns = data.get("eval_duration")
         latency = eval_ns / 1e9 if eval_ns else 0.0

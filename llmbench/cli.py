@@ -1,10 +1,10 @@
 """llmbench CLI.
 
-使用例:
+Examples:
     llmbench list-tasks
     llmbench run --model local-ollama
     llmbench run --model local-openai --tasks t001,t003 --lang ja
-    llmbench validate          # gold/brokenモックで自己検証
+    llmbench validate          # Self-verify using gold/broken mocks
 """
 
 from __future__ import annotations
@@ -32,50 +32,50 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tasks-dir", default="tasks")
     parser.add_argument(
         "--tasks", default=None,
-        help="カンマ区切りのタスクID (例: t001,t003)。省略時は全タスク",
+        help="Comma-separated task IDs (e.g., t001,t003). Defaults to all tasks if omitted",
     )
     parser.add_argument(
         "--with-l6", action="store_true", dest="with_l6",
-        help="既定40問に加えて L6 (architect tier) の追加20問を含める",
+        help="Include 20 additional L6 (architect tier) tasks in addition to the default 40",
     )
     parser.add_argument(
         "--l6-ledger", default="tasks_l6.jsonl", dest="l6_ledger",
-        help="L6 追加台帳のファイル名 (tasks-dir 内。既定: tasks_l6.jsonl)",
+        help="Filename of the additional L6 ledger (inside tasks-dir. Default: tasks_l6.jsonl)",
     )
     parser.add_argument(
         "--with-l7", action="store_true", dest="with_l7",
-        help="既定40問(+L6)に加えて L7 (grandmaster tier) の追加40問を含める",
+        help="Include 40 additional L7 (grandmaster tier) tasks in addition to default 40 (+L6)",
     )
     parser.add_argument(
         "--l7-ledger", default="tasks_l7.jsonl", dest="l7_ledger",
-        help="L7 追加台帳のファイル名 (tasks-dir 内。既定: tasks_l7.jsonl)",
+        help="Filename of the additional L7 ledger (inside tasks-dir. Default: tasks_l7.jsonl)",
     )
     parser.add_argument(
         "--only-l6", action="store_true", dest="only_l6",
-        help="既定40問を除外し L6 (architect) の追加台帳だけを実行する",
+        help="Exclude default 40 tasks and run only the additional L6 (architect) ledger",
     )
     parser.add_argument(
         "--only-l7", action="store_true", dest="only_l7",
-        help="既定40問を除外し L7 (grandmaster) の追加台帳だけを実行する",
+        help="Exclude default 40 tasks and run only the additional L7 (grandmaster) ledger",
     )
-    # --- ドメイン台帳 (コーディング以外) ---
+    # --- Domain ledgers (Non-coding) ---
     for dom, desc in (
-        ("sec", "security 検出/解析"),
-        ("gen", "general 一般タスク/指示追従"),
-        ("write", "writing 創作 (experimental)"),
-        ("med", "medical QA (参考値)"),
+        ("sec", "security detection/analysis"),
+        ("gen", "general tasks/instruction following"),
+        ("write", "creative writing (experimental)"),
+        ("med", "medical QA (reference values)"),
     ):
         parser.add_argument(
             f"--with-{dom}", action="store_true", dest=f"with_{dom}",
-            help=f"既定タスクに {desc} 台帳 (tasks_{dom}.jsonl) を上乗せする",
+            help=f"Append {desc} ledger (tasks_{dom}.jsonl) to default tasks",
         )
         parser.add_argument(
             f"--only-{dom}", action="store_true", dest=f"only_{dom}",
-            help=f"既定タスクを除外し {desc} 台帳だけを実行する",
+            help=f"Exclude default tasks and run only the {desc} ledger",
         )
 
 
-# ドメイン名 -> 台帳ファイル名
+# Domain name -> Ledger filename
 _DOMAIN_LEDGERS = {
     "sec": "tasks_sec.jsonl",
     "gen": "tasks_gen.jsonl",
@@ -85,14 +85,14 @@ _DOMAIN_LEDGERS = {
 
 
 def _ledgers(args) -> list[str]:
-    """実行対象の台帳リストを決める.
+    """Determine the list of target ledgers to execute.
 
-    優先規則:
-      - `--only-l6` / `--only-l7` のいずれかが指定されたら「only モード」。
-        既定台帳 tasks.jsonl を除外し、要求された tier 台帳だけを対象にする。
-      - only モードでも `--with-l6`/`--with-l7` は同 tier の追加要求として尊重する
-        (実質 `--only-l6` と `--with-l6` は同義。両立しても二重追加しない)。
-      - only フラグが一切無ければ従来どおり tasks.jsonl を基点に上乗せ。
+    Priority rules:
+      - If either `--only-l6` / `--only-l7` is specified, enter 'only mode'.
+        Exclude default ledger tasks.jsonl and target only the requested tier ledger.
+      - Even in 'only mode', `--with-l6`/`--with-l7` are respected as additional tier requests
+        (effectively `--only-l6` and `--with-l6` are synonymous; no duplicate additions if both are set).
+      - If no 'only' flag is specified, append to tasks.jsonl as usual.
     """
     only_l6 = getattr(args, "only_l6", False)
     only_l7 = getattr(args, "only_l7", False)
@@ -123,33 +123,33 @@ def cmd_list_tasks(args) -> int:
 
 
 def cmd_models(args) -> int:
-    """利用可能なモデルを一覧する (config定義 + Ollama稼働モデル)."""
+    """List available models (config defined + running Ollama models)."""
     config = _load_config(args.config)
     models = config.get("models", {})
-    print("=== config.yaml 定義モデル ===")
+    print("=== Models Defined in config.yaml ===")
     if models:
         for k, v in models.items():
             extra = f", model={v['model']}" if v.get("model") else ""
             print(f"  {k:14s} (type={v.get('type', '?')}{extra})")
     else:
-        print("  (なし)")
+        print("  (none)")
 
     if args.ollama_host:
         config.setdefault("run", {})["ollama_host"] = args.ollama_host
     host = BenchmarkRunner(config, Path(args.tasks_dir)).ollama_host()
-    print(f"\n=== Ollama 稼働モデル ({host}) ===")
+    print(f"\n=== Running Ollama Models ({host}) ===")
     try:
         names = list_ollama_models(host)
     except Exception as e:
-        print(f"  ⚠️ Ollamaに接続できません: {e}")
-        print("  (Ollamaを起動すると、ここのモデルを --model で直接指定できます)")
+        print(f"  ⚠️ Could not connect to Ollama: {e}")
+        print("  (Start Ollama to directly specify its models using --model)")
         return 0
     if names:
         for n in names:
             print(f"  {n}")
-        print("  → config未定義でも `--model <名前>` でそのまま実行できます")
+        print("  → Can be executed directly with `--model <name>` even if undefined in config")
     else:
-        print("  (インストール済みモデルなし。`ollama pull <model>` で追加)")
+        print("  (No installed models. Add using `ollama pull <model>`)")
     return 0
 
 
@@ -168,37 +168,37 @@ def cmd_run(args) -> int:
             label=args.label, concurrency=args.concurrency,
             client_type=args.client_type, base_url=args.base_url,
         )
-    except ValueError as e:  # モデル解決失敗などは見やすく表示
+    except ValueError as e:  # Format errors cleanly for model resolution failures, etc.
         print(f"❌ {e}", file=sys.stderr)
         return 2
     json_path, md_path = save_run(run, Path(args.output))
     print()
-    print(f"Resolved率   : {run.resolved_rate * 100:.1f}%")
+    print(f"Resolved Rate   : {run.resolved_rate * 100:.1f}%")
     if run.multi_run:
-        print(f"平均成功率   : {run.avg_success_rate * 100:.1f}% (pass@1 ×{run.runs})")
-        print(f"≥1成功タスク : {run.solved_any_rate * 100:.1f}%")
-    print(f"品質平均     : {run.avg_quality_resolved:.1f}/100 (resolvedのみ)")
-    print(f"Combined平均 : {run.avg_combined:.1f}/100")
-    print(f"結果: {json_path}")
-    print(f"レポート: {md_path}")
+        print(f"Avg Success Rate: {run.avg_success_rate * 100:.1f}% (pass@1 ×{run.runs})")
+        print(f"≥1 Success Tasks: {run.solved_any_rate * 100:.1f}%")
+    print(f"Avg Quality     : {run.avg_quality_resolved:.1f}/100 (resolved only)")
+    print(f"Avg Combined    : {run.avg_combined:.1f}/100")
+    print(f"Results: {json_path}")
+    print(f"Report: {md_path}")
     return 0
 
 
 def cmd_compare(args) -> int:
-    """複数の results.json を横断比較するレポートを生成する."""
+    """Generates a cross-comparison report across multiple results.json files."""
     from .compare import load_results, save_comparison
 
     paths = args.results
     if len(paths) < 2:
-        print("⚠️  比較には2つ以上の results.json を推奨します。", file=sys.stderr)
+        print("⚠️  Recommending 2 or more results.json files for comparison.", file=sys.stderr)
     runs = load_results(paths)
     out = save_comparison(runs, Path(args.output), name=args.name)
-    print(f"比較レポート: {out}")
+    print(f"Comparison report: {out}")
     return 0
 
 
 def cmd_certify(args) -> int:
-    """results.json を tier合格制で判定し「使えるライン」到達レベルを表示する."""
+    """Evaluates results.json against tier passing criteria and displays usability tier level."""
     import json
 
     from .certify import (
@@ -233,7 +233,7 @@ def cmd_certify(args) -> int:
 
 
 def cmd_validate(args) -> int:
-    """gold/brokenモックで全パイプラインを自己検証する."""
+    """Self-verify the entire pipeline using gold/broken mocks."""
     config = _load_config(args.config)
     config.setdefault("models", {})
     config["models"]["mock-gold"] = {"type": "mock", "mode": "gold"}
@@ -241,18 +241,18 @@ def cmd_validate(args) -> int:
     runner = BenchmarkRunner(config, Path(args.tasks_dir), ledgers=_ledgers(args))
     only = args.tasks.split(",") if args.tasks else None
 
-    print("=== mock-gold (全タスクresolvedになるべき) ===")
+    print("=== mock-gold (All tasks should be resolved) ===")
     gold = runner.run("mock-gold", only_tasks=only)
-    print("\n=== mock-broken (全タスクfailになるべき) ===")
+    print("\n=== mock-broken (All tasks should fail) ===")
     broken = runner.run("mock-broken", only_tasks=only)
 
     n = len(gold.results)
     ok_gold = sum(r.resolved for r in gold.results)
     ok_broken = sum(not r.resolved for r in broken.results)
-    print(f"\ngold  : {ok_gold}/{n} resolved (期待: {n}/{n})")
-    print(f"broken: {ok_broken}/{n} failed   (期待: {n}/{n})")
-    print(f"gold combined平均: {gold.avg_combined:.1f} (期待: >50)")
-    print(f"broken combined平均: {broken.avg_combined:.1f} (期待: 0)")
+    print(f"\ngold  : {ok_gold}/{n} resolved (Expected: {n}/{n})")
+    print(f"broken: {ok_broken}/{n} failed   (Expected: {n}/{n})")
+    print(f"gold combined avg: {gold.avg_combined:.1f} (Expected: >50)")
+    print(f"broken combined avg: {broken.avg_combined:.1f} (Expected: 0)")
     passed = ok_gold == n and ok_broken == n and broken.avg_combined == 0
     print("VALIDATION:", "PASS" if passed else "FAIL")
     return 0 if passed else 1
@@ -261,73 +261,73 @@ def cmd_validate(args) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="llmbench",
-        description="ローカルLLM向け 機能正確性+品質 ベンチマーク",
+        description="Functional accuracy + quality benchmark for local LLMs",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_list = sub.add_parser("list-tasks", help="タスク一覧を表示")
+    p_list = sub.add_parser("list-tasks", help="Display task list")
     _common_args(p_list)
     p_list.set_defaults(fn=cmd_list_tasks)
 
-    p_models = sub.add_parser("models", help="モデル一覧 (config + Ollama稼働)")
+    p_models = sub.add_parser("models", help="List models (config + active Ollama)")
     _common_args(p_models)
     p_models.add_argument("--ollama-host", default=None, dest="ollama_host",
-                          help="Ollama接続先 (既定: configまたはhttp://localhost:11434)")
+                          help="Ollama host address (Default: config value or http://localhost:11434)")
     p_models.set_defaults(fn=cmd_models)
 
-    p_run = sub.add_parser("run", help="ベンチマーク実行")
+    p_run = sub.add_parser("run", help="Run benchmark")
     _common_args(p_run)
-    p_run.add_argument("--model", required=True, help="config.yamlのモデル名")
+    p_run.add_argument("--model", required=True, help="Model name defined in config.yaml")
     p_run.add_argument("--lang", choices=["en", "ja"], default=None,
-                       help="issue言語 (configを上書き)")
-    p_run.add_argument("--output", default="results", help="結果出力先")
+                       help="Issue language (overrides config)")
+    p_run.add_argument("--output", default="results", help="Output directory for results")
     p_run.add_argument(
         "--runs", type=int, default=None,
-        help="各タスクの試行回数 (>1 で pass@k計測。既定: run.runs または1)",
+        help="Number of trials per task (>1 measures pass@k. Default: run.runs or 1)",
     )
     p_run.add_argument(
         "--sample-temp", type=float, default=None, dest="sample_temp",
-        help="複数試行時のサンプリング温度 (既定: configのrun.sample_temp または0.8)",
+        help="Sampling temperature for multiple trials (Default: config's run.sample_temp or 0.8)",
     )
     p_run.add_argument("--ollama-host", default=None, dest="ollama_host",
-                       help="Ollama接続先 (config未定義モデルの自動解決に使用)")
+                       help="Ollama host address (Used for auto-resolving models not in config)")
     p_run.add_argument(
         "--base-url", default=None, dest="base_url",
-        help="接続先URLを明示指定 (configのbase_urlを上書き。"
-             "例: http://localhost:8085/v1)",
+        help="Explicitly specify target URL (overrides base_url in config. "
+             "e.g., http://localhost:8085/v1)",
     )
     p_run.add_argument(
         "--client-type", default=None, dest="client_type",
         choices=["openai", "ollama", "multiagent"],
-        help="config未定義でも接続種別を直接指定 "
-             "(openai=llama.cpp/vLLM等, ollama, multiagent=CodeRouter)。"
-             "--base-url と併用",
+        help="Specify connection type directly when missing in config "
+             "(openai=llama.cpp/vLLM etc., ollama, multiagent=CodeRouter). "
+             "Used with --base-url",
     )
     p_run.add_argument("--label", default=None,
-                       help="結果ラベルを明示指定 (既定: model:auto時はサーバ検出名)")
+                       help="Explicitly specify result label (Default: server-detected name when model:auto)")
     p_run.add_argument(
         "--concurrency", type=int, default=None,
-        help="試行(runs)を同時実行する並列数 (既定: run.concurrency または1)。"
-             "llama.cpp を --parallel N -cb で起動した場合に有効",
+        help="Concurrency level for running trials in parallel (Default: run.concurrency or 1). "
+             "Effective when llama.cpp is started with --parallel N -cb",
     )
     p_run.set_defaults(fn=cmd_run)
 
-    p_cmp = sub.add_parser("compare", help="複数 results.json を横断比較")
-    p_cmp.add_argument("results", nargs="+", help="比較する results.json (2つ以上)")
-    p_cmp.add_argument("--output", default="results", help="比較レポート出力先")
-    p_cmp.add_argument("--name", default="comparison", help="出力名プレフィックス")
+    p_cmp = sub.add_parser("compare", help="Cross-compare multiple results.json files")
+    p_cmp.add_argument("results", nargs="+", help="results.json files to compare (2 or more)")
+    p_cmp.add_argument("--output", default="results", help="Output directory for comparison report")
+    p_cmp.add_argument("--name", default="comparison", help="Output filename prefix")
     p_cmp.set_defaults(fn=cmd_compare)
 
-    p_val = sub.add_parser("validate", help="モックで自己検証")
+    p_val = sub.add_parser("validate", help="Self-verify using mock objects")
     _common_args(p_val)
     p_val.set_defaults(fn=cmd_validate)
 
-    p_cert = sub.add_parser("certify", help="使えるライン判定 (tier合格制)")
-    p_cert.add_argument("results", nargs="+", help="判定する results.json")
+    p_cert = sub.add_parser("certify", help="Evaluate usability tier based on pass criteria")
+    p_cert.add_argument("results", nargs="+", help="results.json files to evaluate")
     p_cert.add_argument(
         "--merge", action="store_true",
-        help="複数 results.json の results を合算して1つの認証を出す "
-             "(分割実行した base40 + L6 等の統合認証。task_id重複は後勝ち)",
+        help="Combine results across multiple results.json files into a single certificate "
+             "(Merged certificate for split runs like base40 + L6. Last win on duplicate task_ids)",
     )
     p_cert.set_defaults(fn=cmd_certify)
 

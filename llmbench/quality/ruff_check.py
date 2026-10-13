@@ -1,7 +1,7 @@
-"""Ruffによる静的解析スコア.
+"""Static analysis scoring with Ruff.
 
-スコア = max(0, 100 - penalty_per_issue * issue密度)
-issue密度 = issue数 / 変更ファイルの総行数 * 100行
+score = max(0, 100 - penalty_per_issue * issue_density)
+issue_density = issue_count / total_lines_of_changed_files * 100 lines
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# バグ修正タスクの文脈で意味のあるルールに絞る
+# Focused on rules meaningful in the context of bug fix tasks
 RUFF_SELECT = "E,F,W,B,SIM,C4,S"  # pycodestyle, pyflakes, bugbear, simplify, bandit
 
 
@@ -28,7 +28,7 @@ def ruff_score(
          "--no-cache", *targets],
         capture_output=True, text=True, timeout=60,
     )
-    # ruffはissueありで1, なしで0を返す。2以上は実行エラー
+    # Ruff returns 1 when issues are found and 0 when clean. 2 or higher indicates execution error
     if proc.returncode not in (0, 1):
         raise RuntimeError(f"ruff failed: {proc.stderr[:300]}")
 

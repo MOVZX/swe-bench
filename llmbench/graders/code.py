@@ -1,7 +1,7 @@
-"""コード修正 grader (既存パイプラインのラップ).
+"""Code modification grader (wrapper for existing pipeline).
 
-既存の parse_llm_output → evaluate_functional → evaluate_quality → combined_score を
-そのまま Grader インターフェイスに載せる。スコア・validate 結果は現状と完全一致 (後方互換)。
+Wraps the existing parse_llm_output -> evaluate_functional -> evaluate_quality -> combined_score
+flow cleanly inside the Grader interface. Scores and validation results remain completely identical (backward compatible).
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ class CodeGrader(Grader):
         for f in sorted(gold.rglob("*.py")):
             rel = f.relative_to(gold)
             blocks.append(f"--- FILE: {rel} ---\n```python\n{f.read_text()}\n```")
-        return "修正は以下の通りです。\n\n" + "\n\n".join(blocks)
+        return "Here are the fixes.\n\n" + "\n\n".join(blocks)
 
     def mock_broken(self, task) -> str:
-        return "raise SyntaxError(  # 壊れた出力 (フォーマット不正かつ非Python)"
+        return "raise SyntaxError(  # Broken output (invalid format and invalid Python)"

@@ -1,240 +1,234 @@
-# 🛠️ llmbench 運用マニュアル（artifacts / 信頼性 / usability / 比較 / モデル解決）
+# 🛠️ llmbench Operations Manual (artifacts / reliability / usability / comparison / model resolution)
 
-本書は、artifacts保存・レポート刷新に加え、その後追加された **信頼性(pass@k)・usability判定・
-モデル横断比較・モデル解決(model:auto/Ollama動的)** までを、「運用・保守・他システム連携」の
-観点でまとめた**運用＆リファレンスマニュアル**です。
+This document serves as an **operations and reference manual** covering artifact preservation, report overhauls, and subsequent features including **reliability (pass@k), usability classifications, cross-model comparison, and model resolution (model:auto / dynamic Ollama)** from the perspective of operations, maintenance, and system integration.
 
-ドキュメントの役割分担：
+Document Roles:
 
-| ドキュメント | 対象読者 | 内容 |
-|---|---|---|
-| [README.md](README.md) | はじめての人 | 概要・特徴・スコア定義・タスク追加 |
-| [USAGE.md](USAGE.md) | 利用者 | 実行手順と結果の**読み解き方** |
-| [CHANGES.md](CHANGES.md) | 全員 | 追加機能の要約と変更履歴 |
-| **本書（運用マニュアル）** | 運用・保守・連携担当 | 出力ファイルの**仕様**・内部実装・運用上の注意・移行・自動化 |
+| Document                              | Target Audience                 | Content                                                                                           |
+| ------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [README.md](README.md)                | Beginners                       | Overview, features, score definitions, task additions                                             |
+| [USAGE.md](USAGE.md)                  | Users                           | Execution steps and **how to interpret results**                                                  |
+| [CHANGES.md](CHANGES.md)              | Everyone                        | Summary of new features and change history                                                        |
+| **This Document (Operations Manual)** | Ops / Maintainers / Integrators | Output file **specifications**, internal implementation, operational notes, migration, automation |
 
-> 対象バージョン: 既定40タスク(L1-L5) + 任意L6 architect 20タスク(`--with-l6`/単体実行`--only-l6`) + 任意L7 grandmaster 40タスク(`--with-l7`/単体実行`--only-l7`)・多試行(pass@k)・usability・compare・certify(L1-L7、`certify --merge`で分割結果を統合)・`model:auto` 対応版。
-> `results.json` に `summary.usability` / `success_rate` 等を含む。
+> Target Version: Default 40 tasks (L1–L5) + optional L6 architect 20 tasks (`--with-l6` / standalone `--only-l6`) + optional L7 grandmaster 40 tasks (`--with-l7` / standalone `--only-l7`), multi-run (pass@k), usability, compare, certify (L1–L7, integrating split results via `certify --merge`), and `model:auto` support.
+> `results.json` includes `summary.usability`, `success_rate`, etc.
 
 ---
 
-## 目次
+## Table of Contents
 
-1. [新規追加機能の全体像](#1-新規追加機能の全体像)
-2. [出力ファイル仕様（リファレンス）](#2-出力ファイル仕様リファレンス)
-3. [内部実装リファレンス（保守者向け）](#3-内部実装リファレンス保守者向け)
-4. [運用上の注意（ディスク・保持・git）](#4-運用上の注意ディスク保持git)
-5. [自動化・CI連携](#5-自動化ci連携)
-6. [プログラムからの結果アクセス](#6-プログラムからの結果アクセス)
-7. [移行メモ（旧形式との差分）](#7-移行メモ旧形式との差分)
-8. [変更ファイル早見表](#8-変更ファイル早見表)
-9. [追加サブシステム（信頼性・usability・比較・モデル解決）](#9-追加サブシステム信頼性usability比較モデル解決)
-10. [マルチドメイン評価（グレーダー拡張）](#10-マルチドメイン評価グレーダー拡張)
-11. [クラウドLLM（ホスト型API）の評価手順](#11-クラウドllmホスト型apiの評価手順)
-
----
-
-## 1. 新規追加機能の全体像
-
-今回の変更は「スコアが出る」だけだった旧版に対し、
-**「なぜそのスコアなのかをコードまで遡って確認できる」** ことを目的に、次の3点を追加しました。
-
-| # | 機能 | 目的 | 主な実装 |
-|---|---|---|---|
-| ① | **生成物（artifacts）の永続保存** | 失敗・低スコアの原因をコードレベルで追える | `runner.py`: `_write_artifacts()` |
-| ② | **レポートの刷新** | サマリ表・タスク別詳細・読める品質内訳 | `report.py`: `render_markdown()` ほか |
-| ③ | **実行ログの強化** | 実行中にその場で「動いているか」を把握 | `runner.py`: `_log_task()` / `_snippet()` |
-
-副次的に、`results.json` は集計・スコア中心の**軽量JSON**に保たれるよう、
-大きい生成物フィールドを別ディレクトリ（artifacts）へ分離しています。
-
-その後さらに、「**実際どれくらい使えるか**」を測るための機能群を追加しました
-（詳細は **9章**、要約は `CHANGES.md`）:
-
-| # | 機能 | 目的 |
-|---|---|---|
-| ④ | **信頼性 (pass@k / `--runs`)** | 1回成功ではなく、安定して成功するかを成功率で測る |
-| ⑤ | **usabilityティア** | スコアを🟢自律/🟡補助/🔴不可の運用判断に翻訳 |
-| ⑥ | **モデル横断比較 (`compare`)** | 参照モデルと並べて位置づけ |
-| ⑦ | **モデル解決 (`model:auto` / Ollama動的)** | config編集なしでモデルを差し替え |
-| ⑧ | **難タスク t016–t020** | 失敗が出る実務的タスクで識別力を確保（全20タスク） |
+1. [Overall Picture of New Features](%231-overall-picture-of-new-features)
+2. [Output File Specifications (Reference)](%232-output-file-specifications-reference)
+3. [Internal Implementation Reference (For Maintainers)](%233-internal-implementation-reference-for-maintainers)
+4. [Operational Considerations (Disk, Retention, git)](%234-operational-considerations-disk-retention-git)
+5. [Automation & CI Integration](%235-automation--ci-integration)
+6. [Programmatic Access to Results](%236-programmatic-access-to-results)
+7. [Migration Notes (Differences from Old Formats)](%237-migration-notes-differences-from-old-formats)
+8. [Change File Quick Reference Table](%238-change-file-quick-reference-table)
+9. [Additional Subsystems (Reliability, Usability, Comparison, Model Resolution)](%239-additional-subsystems-reliability-usability-comparison-model-resolution)
+10. [Multi-Domain Evaluation (Grader Extension)](%2310-multi-domain-evaluation-grader-extension)
+11. [Evaluation Procedures for Cloud LLMs (Hosted APIs)](%2311-evaluation-procedures-for-cloud-llms-hosted-apis)
 
 ---
 
-## 2. 出力ファイル仕様（リファレンス）
+## 1. Overall Picture of New Features
 
-1回の `run` で、出力先（既定 `results/`）に **3種類** が生成されます。
-`<stamp>` は実行時刻（`YYYYMMDD_HHMMSS`）、`<model>` は `--model` のキー名です。
+In contrast to older versions that only produced numbers, 3 main features were added to ensure **"users can trace low scores or failures back to actual generated code"**:
+
+| #   | Feature                            | Purpose                                                                     | Key Implementation                        |
+| --- | ---------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------- |
+| ①   | **Artifact Preservation**          | Trace causes of failure or low quality at the code level                    | `runner.py`: `_write_artifacts()`         |
+| ②   | **Report Overhaul**                | Clear summary tables, task-level details, human-readable quality breakdowns | `report.py`: `render_markdown()` etc.     |
+| ③   | **Execution Logging Enhancements** | Monitor run-time execution and progress on the fly                          | `runner.py`: `_log_task()` / `_snippet()` |
+
+Secondarily, large generation outputs were separated into a dedicated directory (`artifacts/`) to keep `results.json` as a **lightweight JSON** focused on summary statistics and scores.
+
+Subsequently, additional subsystems were introduced to measure **"practical usability"** (detailed in **Section 9**, summarized in `CHANGES.md`):
+
+| #   | Feature                                              | Purpose                                                                                   |
+| --- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| ④   | **Reliability (pass@k / `--runs`)**                  | Measure stability via success rates across multiple trials rather than single-run passes  |
+| ⑤   | **Usability Tiers**                                  | Translate raw scores into actionable decisions: 🟢 Autonomous / 🟡 Assisted / 🔴 Unusable |
+| ⑥   | **Cross-Model Comparison (`compare`)**               | Benchmark target models side-by-side against reference anchors                            |
+| ⑦   | **Model Resolution (`model:auto` / Dynamic Ollama)** | Swap models seamlessly without manually editing configuration files                       |
+| ⑧   | **High-Difficulty Tasks t016–t020**                  | Establish realistic ceilings with failure-inducing tasks (40 tasks total)                 |
+
+---
+
+## 2. Output File Specifications (Reference)
+
+A single `run` command outputs **3 items** to the designated output folder (default `results/`).
+`<stamp>` represents execution timestamp (`YYYYMMDD_HHMMSS`), and `<model>` represents the key specified in `--model`.
 
 ```
 results/
-├── <stamp>_<model>_results.json      # ① 集計・スコア（機械可読・軽量）
-├── <stamp>_<model>_report.md         # ② 人が読むレポート
-└── <stamp>_<model>_artifacts/        # ③ 生成物（★新規）
+├── <stamp>_<model>_results.json      # ① Summary & scores (machine-readable, lightweight)
+├── <stamp>_<model>_report.md         # ② Human-readable Markdown report
+└── <stamp>_<model>_artifacts/        # ③ Output artifacts
     └── <task_id>/
-        ├── llm_output.txt            #   LLMの生出力
-        ├── generated/<path>          #   適用された生成コード
-        └── test_output.txt           #   pytest出力
+        ├── llm_output.txt            #   Raw text output from LLM
+        ├── generated/<path>          #   Applied generated code files
+        └── test_output.txt           #   pytest console output
+
 ```
 
-### 2.1 `results.json` スキーマ（軽量JSON）
+### 2.1 `results.json` Schema (Lightweight JSON)
 
-トップレベル：
+Top level:
 
-| キー | 型 | 説明 |
-|---|---|---|
-| `model` | str | モデルラベル。`model:auto`時はサーバ検出名、`--label`で上書き可 |
-| `issue_lang` | str | `en` / `ja` |
-| `artifacts_dir` | str | 対応するartifactsディレクトリ名（相対） |
-| `summary` | obj | 下表 |
-| `results` | array | タスクごとの結果（下表） |
+| Key             | Type  | Description                                                                          |
+| --------------- | ----- | ------------------------------------------------------------------------------------ |
+| `model`         | str   | Model label. Detected server model name when `model:auto`, overridable via `--label` |
+| `issue_lang`    | str   | `en` / `ja`                                                                          |
+| `artifacts_dir` | str   | Relative path to the corresponding artifacts directory                               |
+| `summary`       | obj   | See table below                                                                      |
+| `results`       | array | Task results array (see table below)                                                 |
 
-`summary`：
+`summary`:
 
-| キー | 説明 |
-|---|---|
-| `resolved_rate` | resolved 割合（0.0–1.0、小数3桁）。多試行では success_rate≥0.5 を resolved とみなす |
-| `avg_quality_resolved` | **resolvedタスクのみ**の品質平均（小数1桁） |
-| `avg_combined` | 全タスクのcombined平均（小数1桁） |
-| `n_tasks` | タスク数 |
-| `runs` | 1タスクあたりの試行回数 |
-| `usability` | `{autonomous, assisted, unusable}` のタスク数 |
-| `avg_success_rate` | 平均成功率（=平均pass@1）。**多試行時のみ** |
-| `solved_any_rate` | N回中≥1成功したタスクの割合。**多試行時のみ** |
-| `avg_pass_at_k` | 平均pass@k。**多試行時のみ**（k=runsで退化する点に注意） |
+| Key                    | Description                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `resolved_rate`        | Resolved ratio (0.0–1.0, 3 decimals). In multi-run, tasks with `success_rate >= 0.5` are treated as resolved |
+| `avg_quality_resolved` | Quality average of **resolved tasks only** (1 decimal)                                                       |
+| `avg_combined`         | Average combined score across all tasks (1 decimal)                                                          |
+| `n_tasks`              | Total task count                                                                                             |
+| `runs`                 | Number of trials per task                                                                                    |
+| `usability`            | Task count per tier `{autonomous, assisted, unusable}`                                                       |
+| `avg_success_rate`     | Average success rate (= average pass@1). **Present only in multi-run**                                       |
+| `solved_any_rate`      | Ratio of tasks passing ≥1 time out of N runs. **Present only in multi-run**                                  |
+| `avg_pass_at_k`        | Average pass@k. **Present only in multi-run** (Note: degenerates when k = runs)                              |
 
-`results[]`（**軽量化済み** — 大きいフィールドは除外）：
+`results[]` (**Lightweight** — large output fields excluded):
 
-| キー | 型 | 説明 |
-|---|---|---|
-| `task_id` | str | 例: `t001` |
-| `difficulty` | str | `easy` / `medium` / `hard` |
-| `title` | str | タスクタイトル |
-| `resolved` | bool | テスト合格判定（多試行では success_rate≥0.5） |
-| `quality_score` | float | 0–100。多試行では**成功試行の平均** |
-| `combined` | float | 0–100。`success_rate × (floor + (1-floor)×quality/100) × 100` |
-| `latency_sec` / `tokens_per_sec` / `completion_tokens` | — | 速度メトリクス（多試行は平均） |
-| `fail_reason` | str | 失敗理由。部分成功は `flaky c/N passed` |
-| `parse_ok` / `parse_error` | bool/str | 代表試行のパース成否・理由 |
-| `runs` / `n_pass` | int | 試行回数 / 成功回数 |
-| `success_rate` / `pass_at_1` / `pass_at_k` | float | 成功率（=pass@1）/ pass@k |
-| `attempts` | array | 各試行の `{resolved, quality, combined, fail_reason}` |
-| `usability_tier` | str | `autonomous` / `assisted` / `unusable` |
-| `quality_components` | obj | 代表試行の ruff / complexity / … 内訳 |
+| Key                                                    | Type     | Description                                                                    |
+| ------------------------------------------------------ | -------- | ------------------------------------------------------------------------------ |
+| `task_id`                                              | str      | Example: `t001`                                                                |
+| `difficulty`                                           | str      | `easy` / `medium` / `hard`                                                     |
+| `title`                                                | str      | Task title                                                                     |
+| `resolved`                                             | bool     | Pass/fail determination (In multi-run, `success_rate >= 0.5`)                  |
+| `quality_score`                                        | float    | 0–100. In multi-run, **average quality across successful attempts**            |
+| `combined`                                             | float    | 0–100. Computed via `success_rate × (floor + (1-floor) × quality / 100) × 100` |
+| `latency_sec` / `tokens_per_sec` / `completion_tokens` | —        | Latency and throughput metrics (averaged in multi-run)                         |
+| `fail_reason`                                          | str      | Failure description. Partial success reported as `flaky c/N passed`            |
+| `parse_ok` / `parse_error`                             | bool/str | Parse status and reason for the representative run                             |
+| `runs` / `n_pass`                                      | int      | Total runs / successful runs count                                             |
+| `success_rate` / `pass_at_1` / `pass_at_k`             | float    | Success rate (= pass@1) / pass@k metric                                        |
+| `attempts`                                             | array    | Array of attempt records: `{resolved, quality, combined, fail_reason}`         |
+| `usability_tier`                                       | str      | `autonomous` / `assisted` / `unusable`                                         |
+| `quality_components`                                   | obj      | ruff / complexity / etc. details for representative attempt                    |
 
-> ⚠️ **`results.json` に含まれないフィールド**（artifactsへ分離）:
-> `raw_output`（LLM生出力）・`parsed_files`（生成コード）・`test_output`（pytest出力）。
-> これらは `ARTIFACT_FIELDS` として `save_run()` の `_lean()` で除外されます。
-> `changed_files` はプロパティのためJSONには出力されません（artifacts側の `generated/` で確認）。
+> ⚠️ **Fields excluded from `results.json**`(moved to`artifacts/`):
+`raw_output`(raw LLM text),`parsed_files`(generated code files),`test_output`(pytest output).
+These are stripped via`\_lean()`in`save_run()`using`ARTIFACT_FIELDS`.
+`changed_files`is a class property and omitted from JSON (refer to`generated/` in artifacts).
 
-### 2.2 `report.md` の構成
+### 2.2 `report.md` Structure
 
-刷新後の構成は **サマリ → タスク別結果 → 難易度別 → タスク別詳細**。
+The overhauled structure follows: **Summary → Task Results Table → Difficulty Breakdown → Detailed Task Breakdown**.
 
-- **サマリ**: Resolved率（n/N）・品質平均・Combined平均を表形式。`artifacts_dir` がある場合は保存先を注記。
-- **タスク別結果（一覧表）**: 先頭列が ✅/❌ アイコン、**生成ファイル**列と**備考**列（失敗理由・パースエラー）を追加。
-- **難易度別**: easy/medium/hard ごとの resolved 数と品質平均。
-- **タスク別詳細**: タスクごとに難易度・判定・生成ファイル・生成物パス・**整形済み品質内訳**（ruff/complexityを日本語で説明）。
+- **Summary**: Displays Resolved Rate (n/N), Average Quality, and Combined Average in a summary table. Notes artifact output path if present.
+- **Task Results Table**: Leading column shows ✅/❌ status icons, alongside **Generated Files** and **Notes** (failure reasons/parse errors) columns.
+- **Difficulty Breakdown**: Shows resolved count and quality average grouped by easy/medium/hard tiers.
+- **Detailed Task Breakdown**: Per-task difficulty, usability classification, generated file list, artifact path, and **formatted quality breakdowns** (ruff issues and code complexity explained in plain text).
 
-### 2.3 `artifacts/<task_id>/` ディレクトリ契約
+### 2.3 `artifacts/<task_id>/` Directory Contract
 
-| パス | 生成条件 | 中身 |
-|---|---|---|
-| `llm_output.txt` | `raw_output` が非空のとき | LLMが返した生テキスト全体 |
-| `generated/<相対パス>` | パース成功ファイルごと | 適用された生成コード（末尾改行は正規化） |
-| `test_output.txt` | `test_output` が非空のとき | pytestの出力（成功時stdout / 失敗時stdout+stderr） |
+| File Path                   | Generation Condition            | Content                                                         |
+| --------------------------- | ------------------------------- | --------------------------------------------------------------- |
+| `llm_output.txt`            | When `raw_output` is non-empty  | Complete raw text output generated by the LLM                   |
+| `generated/<relative_path>` | Per successfully parsed file    | Code files extracted and applied (normalized trailing newlines) |
+| `test_output.txt`           | When `test_output` is non-empty | pytest output (stdout on success; stdout + stderr on failure)   |
 
-> 📌 **失敗実行も保存される**: パース失敗タスクは `generated/` が空になり、`llm_output.txt` のみ残ります
-> （＝原因調査ができる）。タスクディレクトリ自体は全タスク分作成されます。
+> 📌 **Failed executions are preserved**: Tasks failing parsing will leave `generated/` empty while preserving `llm_output.txt` for debugging. Task subdirectories are created for all tasks regardless of status.
 
 ---
 
-## 3. 内部実装リファレンス（保守者向け）
+## 3. Internal Implementation Reference (For Maintainers)
 
 ### 3.1 `runner.py`
 
-- **`TaskResult` の新フィールド**: `title` / `parse_ok` / `parse_error` / `parsed_files` / `raw_output` / `test_output`、
-  および `changed_files`（`parsed_files` のキー一覧を返すプロパティ）。
+- **New fields on `TaskResult**`: `title`/`parse_ok`/`parse_error`/`parsed_files`/`raw_output`/`test_output`, and `changed_files`(property returning keys of`parsed_files`).
 - **`ARTIFACT_FIELDS = ("raw_output", "parsed_files", "test_output")`**:
-  `save_run()` 内の `_lean()` がこの3つを `asdict()` 結果から `pop` し、JSONを軽量化。
-- **`_run_task()`**: 生成直後に `raw_output` を、パース結果（`parse_ok`/`parse_error`/`parsed_files`）を、
-  機能評価後に `test_output` を `TaskResult` へ記録。
-- **`_write_artifacts(run, artifacts_dir)`**: タスクごとに `llm_output.txt` / `generated/<path>` / `test_output.txt` を書き出す。
-- **`_log_task(progress, tr)` / `_snippet(text, n)`**: 実行ログを整形出力（生成ファイル・LOC・コード冒頭・テスト失敗末尾3行）。
-- **`save_run()`**: `<stamp>_<model>_artifacts` を作り `_write_artifacts()` を呼び、`run.artifacts_dirname` を設定。
-  `results.json`（lean）と `report.md` を書き出す。
+  Stripped from `asdict()` inside `save_run()` via `_lean()` to maintain compact JSON outputs.
+- **`_run_task()`**: Attaches `raw_output` immediately after generation, attach parse states (`parse_ok`/`parse_error`/`parsed_files`), and attaches `test_output` following functional evaluations.
+- **`_write_artifacts(run, artifacts_dir)`**: Writes `llm_output.txt`, `generated/<path>`, and `test_output.txt` per task directory.
+- **`_log_task(progress, tr)` / `\_snippet(text, n)**`: Formats execution logs to stdout (displaying files generated, LOC, code snippet header, and trailing 3 lines of failed pytest output).
+- **`save_run()`**: Creates `<stamp>_<model>_artifacts`, calls `_write_artifacts()`, sets `run.artifacts_dirname`, and writes out lean `results.json` and `report.md`.
 
 ### 3.2 `report.py`
 
-| 関数 | 役割 |
-|---|---|
-| `render_markdown(run)` | レポート全体を組み立て |
-| `_fmt_ruff(c)` | ruff内訳を整形（指摘なし／件数・密度・ルール・score） |
-| `_fmt_complexity(c)` | complexity内訳を整形（MI・最悪CCランク・最複雑関数） |
-| `_fmt_component(name, c)` | レイヤー名で整形関数を振り分け（汎用フォールバックあり） |
-| `_status_icon(r)` | resolved を ✅/❌ に変換 |
+| Function                  | Role                                                                         |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `render_markdown(run)`    | Assembles full report output                                                 |
+| `_fmt_ruff(c)`            | Formats ruff issue counts, issue density, rule violations, and penalties     |
+| `_fmt_complexity(c)`      | Formats radon Maintainability Index, worst CC rank, and highest CC functions |
+| `_fmt_component(name, c)` | Routes quality component formatting per evaluator layer                      |
+| `_status_icon(r)`         | Maps boolean resolved state to ✅/❌ status icons                            |
 
-### 3.3 ログ出力フォーマット（`_log_task`）
+### 3.3 Log Output Format (`_log_task`)
 
 ```
-[3/15] t003 (easy) リスト要素の重複除去
-    生成OK  files=[dedup.py]  214tok @ 126.9tok/s
+[3/15] t003 (easy) Deduplicate List Items
+    Generation OK  files=[dedup.py]  214tok @ 126.9tok/s
       └ dedup.py (12 LOC): def dedup(items): ⏎ seen = set()
     ✅ RESOLVED  quality=100 combined=100  (1.5s)
+
 ```
 
-- パース失敗時は `生成パース失敗: <理由>` と `出力プレビュー:`（生出力冒頭）を表示。
-- テスト失敗時は `| ...` で pytest 出力末尾3行を表示。
+- Parse failures display `Generation Parse Failed: <reason>` alongside `Output Preview:` (first few lines of raw output).
+- Test failures output trailing 3 lines of pytest logs formatted with `| ...`.
 
 ---
 
-## 4. 運用上の注意（ディスク・保持・git）
+## 4. Operational Considerations (Disk, Retention, git)
 
-### 4.1 ディスク使用量
+### 4.1 Disk Usage
 
-artifacts は**実行ごと**に `llm_output.txt`（生出力全文）・`generated/`・`test_output.txt` を保存します。
-タスク数 × モデル × 試行回数の分だけ蓄積されるため、定期的な掃除を推奨します。
+Artifact folders save `llm_output.txt` (full text), `generated/`, and `test_output.txt` **on every single run execution**.
+Disk usage accumulates proportional to `tasks × models × runs`. Periodic cleanup is recommended:
 
 ```bash
-# 出力先全体のサイズ確認
+# Check overall size of results directory
 du -sh results/*
 
-# 直近5実行のみ残して古いものを削除（例）
+# Keep latest 5 runs and delete older execution artifacts
 ls -dt results/*_artifacts | tail -n +6 | xargs rm -rf
 ls -t  results/*_results.json | tail -n +6 | xargs rm -f
 ls -t  results/*_report.md   | tail -n +6 | xargs rm -f
+
 ```
 
 ### 4.2 `.gitignore`
 
-実行結果はリポジトリに含めないのが基本です。リポジトリの `.gitignore` に
-`results/` 系が含まれているか確認してください（生出力にプロンプト全文が残るため、共有時は内容に注意）。
+Execution outputs should generally be kept out of version control. Ensure repository `.gitignore` includes `results/` entries (exercise caution when sharing artifacts externally, as raw outputs contain full task prompt texts):
 
 ```gitignore
 results/
 *_artifacts/
+
 ```
 
-### 4.3 元タスクの不変性
+### 4.3 Immutability of Original Tasks
 
-artifacts への書き込みは出力先ディレクトリ配下のみ。タスク定義（`tasks/`）や元ソースは一切変更されません
-（パッチ適用は一時workspaceに対してのみ実行）。
+All artifact writes are restricted to the designated output results directory. Task source files in `tasks/` remain strictly immutable (patches are applied inside isolated temporary workspaces).
 
 ---
 
-## 5. 自動化・CI連携
+## 5. Automation & CI Integration
 
-### 5.1 パイプライン健全性ゲート（`validate`）
+### 5.1 Pipeline Health Gate (`validate`)
 
-LLM接続不要のモック検証。CIの前段ゲートに使えます。
+Mock validation requiring no external LLM connections. Serves as a pre-commit or CI health gate:
 
 ```bash
-llmbench validate            # PASS で exit 0 / FAIL で exit 1
+llmbench validate            # Returns exit code 0 on PASS / 1 on FAIL
+
 ```
 
-- mock-gold が全タスク resolved、mock-broken が全タスク fail、broken combined平均=0 のとき `VALIDATION: PASS`。
+- Returns `VALIDATION: PASS` when `mock-gold` resolves all tasks, `mock-broken` fails all tasks, and average combined score for broken runs equals 0.
 
-### 5.2 複数モデル比較
+### 5.2 Multi-Model Comparison
 
 ```bash
 llmbench run --model local-openai --output results
@@ -245,376 +239,351 @@ for f in results/*_results.json; do
     s=d['summary']; print(f\"{d['model']:24s} resolved={s['resolved_rate']*100:5.1f}%  \
 combined={s['avg_combined']:.1f}  quality={s['avg_quality_resolved']:.1f}\")" "$f"
 done
+
 ```
 
-`results.json` は軽量（生出力を含まない）ため、CIアーティファクトとして保管しても軽量です。
-詳細調査が必要なときだけ対応する `*_artifacts/` を併せて保管します。
+Because `results.json` files are lightweight, they can be comfortably stored as standard CI build artifacts. Store accompanying `*_artifacts/` folders only when detailed debugging traces are required.
 
 ---
 
-## 6. プログラムからの結果アクセス
+## 6. Programmatic Access to Results
 
-### 6.1 `jq` での集計例
+### 6.1 `jq` Aggregation Examples
 
 ```bash
-# 失敗タスクのIDと理由を列挙
+# List failed task IDs and reasons
 jq -r '.results[] | select(.resolved|not) | "\(.task_id)\t\(.fail_reason)"' \
   results/<stamp>_<model>_results.json
 
-# パース失敗だけ抽出
+# Extract parse failures only
 jq -r '.results[] | select(.parse_ok|not) | "\(.task_id)\t\(.parse_error)"' \
   results/<stamp>_<model>_results.json
 
-# artifactsディレクトリ名を取得し、失敗タスクの生出力を開く
+# Retrieve artifact path and open raw LLM output for a failed task
 adir=$(jq -r '.artifacts_dir' results/<stamp>_<model>_results.json)
 cat "results/$adir/t011/llm_output.txt"
+
 ```
 
-### 6.2 失敗原因の追い方（フロー）
+### 6.2 Failure Troubleshooting Workflow
 
-| 症状 | 見るファイル | 分かること |
-|---|---|---|
-| `parse_ok=false` | `artifacts/<id>/llm_output.txt` | `--- FILE: path ---`＋コードブロック形式の崩れ |
-| `fail_reason=tests failed` | `artifacts/<id>/test_output.txt` → `generated/` | 落ちたassert → 該当ロジック誤り |
-| `fail_reason=timeout` | `test_output.txt` | 無限ループ等。`run.test_timeout` の見直し |
-| 品質が低い | `generated/<path>` | ruff指摘・複雑な関数を実コードで確認 |
+| Symptom                    | File to Inspect                                 | Diagnostic Information                                                     |
+| -------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------- |
+| `parse_ok=false`           | `artifacts/<id>/llm_output.txt`                 | Malformed `--- FILE: path ---` blocks or markdown formatting syntax issues |
+| `fail_reason=tests failed` | `artifacts/<id>/test_output.txt` → `generated/` | Inspect failed assertions to locate faulty implementation logic            |
+| `fail_reason=timeout`      | `test_output.txt`                               | Infinite loops or performance bottlenecks; adjust `run.test_timeout`       |
+| Low quality score          | `generated/<path>`                              | Check ruff warnings or complex functions directly within generated code    |
 
 ---
 
-## 7. 移行メモ（旧形式との差分）
+## 7. Migration Notes (Differences from Old Formats)
 
-旧版の出力をパースしている既存スクリプトがある場合、次の差分に注意してください。
+When maintaining scripts that parse outputs from legacy versions, take note of the following differences:
 
 ### 7.1 `results.json`
 
-- **追加**: トップレベル `artifacts_dir`、各 result に `title` / `parse_ok` / `parse_error`。
-- **削除（lean化）**: result から `raw_output` / `parsed_files` / `test_output` は**出力されません**（artifactsへ移動）。
-  これらをJSONから読んでいたスクリプトは、artifactsファイル参照へ切り替えが必要です。
+- **Added**: Top-level `artifacts_dir`, along with `title`, `parse_ok`, and `parse_error` per task entry in `results`.
+- **Removed (Lean JSON)**: `raw_output`, `parsed_files`, and `test_output` are **no longer embedded** in task result items. Scripts accessing these properties should be updated to read directly from corresponding files in `artifacts/`.
 
 ### 7.2 `report.md`
 
-- **タスク別結果テーブルの列構成が変更**されました。
-  - 旧: `| Task | 難易度 | Resolved | Quality | Combined | 生成時間(s) | tok/s | 失敗理由 |`（8列、先頭=Task）
-  - 新: `| | Task | 難易度 | 生成ファイル | Quality | Combined | 生成時間 | tok/s | 備考 |`（9列、先頭=✅/❌アイコン）
-  - Resolved の `O/X` は ✅/❌ に変更。Markdownテーブルを機械パースしている場合は要修正。
-- セクション見出し `## 品質内訳 (タスク別)` は `## タスク別詳細` に変更。
+- **Task Results Table Column Layout Updated**:
+- Legacy: `| Task | Difficulty | Resolved | Quality | Combined | Time(s) | tok/s | Fail Reason |` (8 columns, leading Task)
+- Updated: `| | Task | Difficulty | Generated Files | Quality | Combined | Time | tok/s | Notes |` (9 columns, leading ✅/❌ icon)
+- Resolved `O/X` indicators replaced with ✅/❌ icons. Update automated Markdown parsing rules accordingly.
+
+- Section header `## Quality Breakdown (Per Task)` renamed to `## Detailed Task Breakdown`.
 
 ### 7.3 `config.yaml`
 
-- サンプルの `local-openai` が `base_url: http://localhost:8085/v1` / `model: Qwopus3.6-27B-Coder-MTP` に更新。
-  これは設定例の変更であり挙動には影響しません。**結果ファイル名は `--model` のキー名**（`local-openai`）で決まるため、
-  キー名を変えない限りファイル名は安定します。
+- Example `local-openai` entry updated to `base_url: http://localhost:8085/v1` / `model: Qwopus3.6-27B-Coder-MTP`.
+  This is a configuration sample update and does not change harness execution. Output filenames derive from the `--model` key name (`local-openai`), maintaining stable file naming.
 
 ---
 
-## 8. 変更ファイル早見表
+## 8. Change File Quick Reference Table
 
-| ファイル | 変更概要 |
-|---|---|
-| `llmbench/runner.py` | artifacts保存 + **多試行集計**（`Attempt`/`_aggregate_attempts`/pass@k）・**モデル解決**（`resolve_model`/Ollama自動・`model:auto`ラベル）・`_log_task` |
-| `llmbench/scoring.py` | `combined_score` を success_rate スケールに一般化 + `pass_at_k`（不偏推定量） |
-| `llmbench/usability.py` | **新規**。ティア分類 `classify()` と集計 `aggregate()` |
-| `llmbench/compare.py` | **新規**。複数 results.json の横断比較レポート |
-| `llmbench/report.py` | usability判定セクション・信頼性列・pass@1主指標・保守的な総合推奨・品質内訳注記 |
-| `llmbench/clients/openai_compat.py` | `model:auto` のサーバ検出（`fetch_served_model`）・APIキー環境変数展開 |
-| `llmbench/clients/ollama.py` | `list_ollama_models()`（`/api/tags`） |
-| `llmbench/cli.py` | `models` / `compare` / **`certify`** サブコマンド・`--runs`/`--sample-temp`/**`--concurrency`**/`--label`/`--ollama-host`・**`--with-l6`/`--l6-ledger`**・**`--with-l7`/`--l7-ledger`**・**`--only-l6`/`--only-l7`（list-tasks/run/validate共通の`_common_args`）**・**`certify --merge`** |
-| `llmbench/certify.py` | **新規**。難易度→tier(L1-L7)、tier別gate判定（`certify`/`render_certificate_md`）。使えるライン=L4独立合格・**architect→L6 gate**・**grandmaster→L7 gate（暫定・天井評価用）**・**`merge_results()`（複数results.jsonの合算。task_id後勝ち・model名を出現順distinctで` + `連結）/ `certify --merge`（単体スクリプトでも`python3 certify.py --merge`で対応）** |
-| `llmbench/tasks.py` | `Task.perf_timeout` フィールド・**`load_tasks(..., ledgers=[...])` で複数台帳マージ（id先勝ち）** |
-| `llmbench/runner.py` | per-task `perf_timeout` を採用（未指定時は `test_timeout`）・**`BenchmarkRunner(..., ledgers=...)`** |
-| `config.yaml` | `model:auto`・`run.runs`/`sample_temp`/`ollama_host`・`usability:`・`ref-gpt` |
-| `tasks/` | 難タスク t016–t020 + **L4 expert t021–t032 / L5 frontier t033–t040**（既定40タスク）+ **L6 architect t041–t060（別台帳 `tasks_l6.jsonl`・`--with-l6` で有効化）** + **L7 grandmaster t061–t100（別台帳 `tasks_l7.jsonl`・`--with-l7` で有効化。数値安定性(t061-068)/状態一貫性(t069-076)/複数結合バグ(t077-084)/深い並行性(t085-092)/敵対的パース・セキュリティ(t093-100)の5軸×8問。t098のみ `perf_timeout: 30`）** |
-| `llmbench/graders/` | **新規パッケージ**（マルチドメイン評価）。`__init__.py`（グレーダーレジストリ + `GradeCtx`/`GraderEval`）・`checks.py`（IFEval式チェック群）・`code.py`（既存パイプラインのラップ）・`detection.py`（security）・`constraint.py`（general）・`judge.py`（writing・experimental）・`qa.py`（medical・reference value）。各グレーダーは `(resolved, quality)` に正規化して返すため、既存の集計/pass@k/usability/certifyパイプラインは無改修 |
-| `llmbench/cli.py`（マルチドメイン） | **`--with-sec/gen/write/med`・`--only-sec/gen/write/med`**（`--with-l6/l7`と同体系。list-tasks/run/validate共通の`_common_args`を拡張） |
-| `llmbench/certify.py`（マルチドメイン） | **ドメイン別ゲート**（`certify_domains`）・**バランス指数**（coding＋非experimentalドメインの調和平均）・**医療の難易度別(med_basic/med_std/med_hard)正答率readout** |
-| `llmbench/report.py`（マルチドメイン） | **「🌐 ドメイン別」**サマリ節を追加 |
-| `config.yaml`（マルチドメイン） | **`graders:`**（pass_f1/pass_ratio/pass_score）・**`quality.judge:`**（enabled/judge_model/seeds）・**`certify_domains:`** |
-| `tasks/`（マルチドメイン） | **ドメインタスク追加**: security s01–s04（別台帳`tasks_sec.jsonl`、`--with-sec`）/ general g01–g03（`tasks_gen.jsonl`、`--with-gen`）/ writing w01–w02（`tasks_write.jsonl`、`--with-write`）/ medical m01–m24（`tasks_med.jsonl`、`--with-med`。難易度 med_basic7/med_std11/med_hard6、全問ファクトチェック済） |
+| File                                 | Change Overview                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `llmbench/runner.py`                 | Artifact preservation + **Multi-trial aggregation** (`Attempt`/`_aggregate_attempts`/pass@k) + **Model resolution** (`resolve_model`/Ollama auto/`model:auto` label) + `_log_task`                                                                                                                                                                                                                                                                                                                      |
+| `llmbench/scoring.py`                | Generalized `combined_score` scaling via success rate + `pass_at_k` (unbiased estimator)                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `llmbench/usability.py`              | **New**. Tier classification via `classify()` and summary aggregation via `aggregate()`                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `llmbench/compare.py`                | **New**. Cross-model comparison report generator across multiple `results.json` files                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `llmbench/report.py`                 | Added usability sections, reliability table columns, pass@1 main metric, conservative recommendations, and quality breakdown notes                                                                                                                                                                                                                                                                                                                                                                      |
+| `llmbench/clients/openai_compat.py`  | Server model auto-detection (`fetch_served_model`) for `model:auto` + environment variable expansion for API keys                                                                                                                                                                                                                                                                                                                                                                                       |
+| `llmbench/clients/ollama.py`         | `list_ollama_models()` (`/api/tags`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `llmbench/cli.py`                    | Added `models` / `compare` / **`certify`** subcommands, `--runs` / `--sample-temp` / **`--concurrency`** / `--label` / `--ollama-host`, **`--with-l6` / `--l6-ledger**`, **`--with-l7`/`--l7-ledger**`, **`--only-l6` / `--only-l7` (extended shared `_common_args` across list-tasks/run/validate)**, and **`certify --merge`\*\*                                                                                                                                                                      |
+| `llmbench/certify.py`                | **New**. Difficulty to tier mapping (L1–L7), gate evaluation per tier (`certify`/`render_certificate_md`), usability line = independent L4 pass, **architect → L6 gate**, **grandmaster → L7 gate (provisional ceiling eval)**, and **`merge_results()` (merges multiple results files using last-wins logic for task IDs and concatenating model names in distinct appearance order with `+`) / `certify --merge` CLI support**                                                                        |
+| `llmbench/tasks.py`                  | Per-task `perf_timeout` field + **Multi-ledger loading in `load_tasks(..., ledgers=[...])` (first task ID wins)**                                                                                                                                                                                                                                                                                                                                                                                       |
+| `llmbench/runner.py`                 | Applied per-task `perf_timeout` (falls back to `test_timeout` if omitted) + **`BenchmarkRunner(..., ledgers=...)`**                                                                                                                                                                                                                                                                                                                                                                                     |
+| `config.yaml`                        | `model:auto`, `run.runs` / `sample_temp` / `ollama_host`, `usability:`, and `ref-gpt`                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `tasks/`                             | Added hard tasks t016–t020 + **L4 expert t021–t032 / L5 frontier t033–t040** (40 default tasks) + **L6 architect t041–t060 (separate `tasks_l6.jsonl` ledger enabled via `--with-l6`)** + **L7 grandmaster t061–t100 (separate `tasks_l7.jsonl` ledger enabled via `--with-l7`; 5 axes × 8 questions covering Numerical Stability t061–068, State Consistency t069–076, Multi-Coupling Bugs t077–084, Deep Concurrency t085–092, Adversarial Parsing/Security t093–100; t098 sets `perf_timeout: 30`)** |
+| `llmbench/graders/`                  | **New Package** (Multi-domain evaluation): `__init__.py` (grader registry + `GradeCtx`/`GraderEval`), `checks.py` (IFEval checks), `code.py` (wrapped legacy pipeline), `detection.py` (security), `constraint.py` (general), `judge.py` (writing - experimental), `qa.py` (medical - reference value). Graders normalize output to `(resolved, quality)` to reuse existing pass@k / usability / certification pipelines without modifications                                                          |
+| `llmbench/cli.py` (Multi-Domain)     | **`--with-sec/gen/write/med` and `--only-sec/gen/write/med**`(extends shared`\_common_args`following`--with-l6/l7` architecture)                                                                                                                                                                                                                                                                                                                                                                        |
+| `llmbench/certify.py` (Multi-Domain) | **Domain-specific gates** (`certify_domains`), **Balance Index** (harmonic mean across coding + non-experimental domains), and **Medical difficulty breakdown (med_basic/med_std/med_hard) accuracy readout**                                                                                                                                                                                                                                                                                           |
+| `llmbench/report.py` (Multi-Domain)  | Added **"🌐 Domain Summary"** section to report outputs                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `config.yaml` (Multi-Domain)         | **`graders:`** (`pass_f1`/`pass_ratio`/`pass_score`), **`quality.judge:`** (`enabled`/`judge_model`/`seeds`), and **`certify_domains:`**                                                                                                                                                                                                                                                                                                                                                                |
+| `tasks/` (Multi-Domain)              | **Domain Tasks Added**: Security s01–s04 (separate ledger `tasks_sec.jsonl`, `--with-sec`), General g01–g03 (`tasks_gen.jsonl`, `--with-gen`), Writing w01–w02 (`tasks_write.jsonl`, `--with-write`), Medical m01–m24 (`tasks_med.jsonl`, `--with-med`; difficulties med_basic 7 / med_std 11 / med_hard 6, fully fact-checked)                                                                                                                                                                         |
 
-> 検証状況: `llmbench validate` PASS（gold 40/40・broken 40/40）、selfcheck 既存20問 + **L6 20問 20/20** + **L7 40問 40/40**、
-> `validate --with-l6` で gold 20/20・broken 20/20、`validate --with-l7` で gold 40/40・broken 40/40、
-> `list-tasks` 40（既定）/ 60（`--with-l6`）/ 80（`--with-l7`）/ 100（`--with-l6 --with-l7`）/
-> 20（`--only-l6`）/ 40（`--only-l7`）/ 60（`--only-l6 --only-l7`）、
-> 多試行集計・usability・compare・certify・モデル解決の各単体、ruff（指摘ゼロ）、`compileall` を確認済み。
-> 追加検証（マルチドメイン）: `llmbench validate --only-sec|gen|write|med` が全てPASS（gold全成功・broken全失敗、LLM不要）。詳細は10章。
-
----
-
-## 9. 追加サブシステム（信頼性・usability・比較・モデル解決）
-
-artifacts導入後に加わった主要機能の運用リファレンス。利用手順は `USAGE.md`、要約は `CHANGES.md`。
-
-### 9.1 信頼性 (pass@k)
-
-`--runs N`（または `run.runs`）で各タスクをN回サンプリング。`runner._aggregate_attempts()` が
-成功率(=pass@1)・pass@k・代表試行を集計する。`scoring.pass_at_k(n,c,k)` は Chen et al. 2021 の不偏推定量。
-**注意**: 本ハーネスは n=runs サンプルなので、`pass_at_k`（k=runs）は「N回中≥1成功」に退化する。
-運用上の主指標は **success_rate(pass@1)**、補助に **solved_any_rate** を見ること。
-
-### 9.2 usabilityティア
-
-`usability.classify(success_rate, quality, cfg)` が 🟢自律 / 🟡補助 / 🔴不可 を返す。しきい値は
-`config.yaml` の `usability:`。レポートは難易度×ティアの**割合**と、🔴不可を隠さない**保守的な総合推奨**を出す。
-
-### 9.3 モデル比較 `compare`
-
-`llmbench compare <results.json...>` → `comparison_<stamp>.md`。ランキング（最良比の相対スコア）・
-ティア比較・タスク別Combinedマトリクスを生成。参照アンカーとして API モデル（`ref-gpt`）を併走させる。
-
-### 9.4 モデル解決（config編集レス運用）
-
-- `model: auto` … `openai_compat.fetch_served_model()` が `/v1/models` からロード中モデルを取得。
-  ラベル（レポート/ファイル名）も実モデル名（`runner._label_from_model` で `.gguf` 除去）。
-- Ollama動的 … config未定義の `--model <名前>` は `runner.resolve_model()` が `/api/tags` から解決。
-- 接続先優先順 (Ollamaホスト): `--ollama-host` > env `OLLAMA_HOST` > config の ollama モデル `base_url` > `http://localhost:11434`。
-- 接続先優先順 (base_url): `--base-url` > config `base_url` (`${VAR}` 展開可) > 型別 env (`OPENAI_BASE_URL` / `OLLAMA_HOST` / `CODEROUTER_BASE_URL`) > 型別デフォルト。
-- `--client-type openai|ollama|multiagent` で config 未定義でも直接接続できる
-  (例: `llmbench run --model auto --client-type openai --base-url http://localhost:8085/v1` で llama.cpp 直結、
-   `--client-type multiagent --base-url http://localhost:8088` で CodeRouter)。
-- `model: auto` は複数モデルロード時に `auto_prefer: "<部分文字列>"` で選択可能。未指定なら先頭を採用し警告を表示。
-- 未設定の `${VAR}` 参照は明確なエラーになる (旧: 無警告で空文字 → 分かりにくい401)。
-- `--label` で明示固定。APIキーは `${VAR}` を環境変数展開。
-
-### 9.5 運用上の注意
-
-- **多試行はディスク/時間が N 倍**。artifactsは代表1試行のみ保存するので肥大化は限定的だが、生出力は残る。
-- pass@k の解釈は 9.1 の通り。`avg_pass_at_k` を「汎化性能」と誤読しないこと。
-- レポート表の列数が増えている（判定・信頼性列）。機械パースは要追従（7章の移行メモ参照）。
+> Verification Status: Verified `llmbench validate` PASS (40/40 gold green / 40/40 broken fail), selfchecks across existing 20 tasks + **L6 20 tasks (20/20)** + **L7 40 tasks (40/40)**,
+> `validate --with-l6` gold 20/20 & broken 20/20, `validate --with-l7` gold 40/40 & broken 40/40,
+> `list-tasks` 40 (default) / 60 (`--with-l6`) / 80 (`--with-l7`) / 100 (`--with-l6 --with-l7`) /
+> 20 (`--only-l6`) / 40 (`--only-l7`) / 60 (`--only-l6 --only-l7`),
+> individual verification for multi-run aggregation, usability, compare, certify, model resolution, ruff (0 warnings), and `compileall`.
+> Additional Multi-Domain Verification: `llmbench validate --only-sec|gen|write|med` all PASSED (all gold pass, all broken fail; zero LLM calls). See Section 10 for details.
 
 ---
 
-## 10. マルチドメイン評価（グレーダー拡張）
+## 9. Additional Subsystems (Reliability, Usability, Comparison, Model Resolution)
 
-コーディング専用だった評価を、**採点器(grader)を差し替え可能**にすることで他能力へ横展開した機能です。
-設計の詳細（採点式・出力契約・validate仕様）は [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) を参照してください。
-本章は運用・保守観点のリファレンスです。利用手順は `USAGE.md`、要約は `CHANGES.md`。
+Operational reference for major features introduced alongside artifact preservation. Usage guides available in `USAGE.md`; executive summary in `CHANGES.md`.
 
-### 10.1 grader の仕組みと後方互換性
+### 9.1 Reliability (pass@k)
 
-各 grader は `build_prompt()`（出力フォーマットの指示）と `evaluate()`（採点）を持ち、結果を
-`GraderEval`（`resolved: bool` / `quality_score: 0-100` / `components` / `fail_reason` など）に
-**正規化**して返す。この正規化のおかげで `_aggregate_attempts` / `combined_score` / pass@k /
-usability / certify は**一切変更せず**再利用される。
+Specify `--runs N` (or `run.runs`) to sample each task N times. `runner._aggregate_attempts()` aggregates success rate (= pass@1), pass@k, and representative attempts. `scoring.pass_at_k(n,c,k)` implements Chen et al. 2021's unbiased estimator.
+**Note**: Because this harness samples n = runs attempts, `pass_at_k` (where k = runs) degenerates to "at least 1 pass out of N attempts".
+Primary operational metrics to track are **success_rate (pass@1)** and **solved_any_rate**.
 
-- 台帳レコードに `grader` フィールドが**無い**場合は `code`（既存パイプラインのラップ）が既定。
-- 既定台帳 `tasks.jsonl` のみを実行した場合の結果・スコア・`validate` 判定は**従来と完全一致**する。
-- パッケージは `llmbench/graders/`（`__init__.py` = レジストリ + `GradeCtx`/`GraderEval`、`checks.py`、
-  `code.py`、`detection.py`、`constraint.py`、`judge.py`、`qa.py`）に新設。
+### 9.2 Usability Tiers
 
-### 10.2 4ドメインの概要
+`usability.classify(success_rate, quality, cfg)` classifies task usability into 🟢 Autonomous / 🟡 Assisted / 🔴 Unusable based on thresholds in `config.yaml` under `usability:`. Reports present **proportions** across difficulty levels and generate **conservative recommendations** that avoid masking 🔴 Unusable tasks.
 
-| domain | grader | 台帳 | フラグ | 採点方式 |
-|---|---|---|---|---|
-| security | `detection` | `tasks_sec.jsonl` | `--with-sec` / `--only-sec` | `--- FINDINGS ---` 後のJSON配列をgoldラベルと precision/recall/**F1** で採点。`resolved = F1 ≥ pass_f1`（既定0.67）。`gold.findings` が空の**クリーンなデコイ**タスクで過検出(precision低下)を罰する |
-| general | `constraint` | `tasks_gen.jsonl` | `--with-gen` / `--only-gen` | `--- ANSWER ---` 後の回答を `checks.json`（IFEval式: word_count/line_count/char_count/contains/not_contains/starts_with/ends_with/equals/regex/json_valid/json_path）で機械検証。`resolved = 全チェック通過`（`pass_ratio` 既定1.0）、`quality = 通過率×100` |
-| writing | `judge` | `tasks_write.jsonl` | `--with-write` / `--only-write` | **experimental**。`rubric.json` の `hard_constraints`（決定的ゲート、checkと同種kind）+ `criteria` + `pass_score`。judgeモデル設定時（`quality.judge.enabled`）は0-10点を`seeds`回平均し `quality=score×10`、`resolved=(score≥pass_score) かつ hard通過`。judge未設定時は `hard_constraints` のみで決定的判定（validate等はこの経路） |
-| medical | `qa` | `tasks_med.jsonl` | `--with-med` / `--only-med` | **参考値**。`gold.json` は `{"mode":"mcq","answer":"C"}`（選択肢一致）または `{"mode":"keyword","all":[...],"any":[...]}`（`all`を全て・`any`を1つ以上含む）。gold keywordは**日英両方**を含むため `--lang ja` の日本語モデルも正しく採点される |
+### 9.3 Model Comparison (`compare`)
 
-### 10.3 CLI
+Run `llmbench compare <results.json...>` to output `comparison_<stamp>.md`. Generates rankings (relative score ratio against best performer), usability tier comparisons, and task-by-task Combined score matrices. Benchmark target models side-by-side against reference anchor models (e.g. `ref-gpt`).
 
-`--with-l6`/`--with-l7`/`--only-l6`/`--only-l7` と同じ体系です。
+### 9.4 Model Resolution (Config-Edit Free Operations)
 
-- `--with-sec` / `--with-gen` / `--with-write` / `--with-med` … 既定タスクにドメイン台帳を上乗せ
-- `--only-sec` / `--only-gen` / `--only-write` / `--only-med` … 既定タスクを除外し当該ドメインのみ実行
-- `certify --merge` はドメイン結果を含む results.json にもそのまま使える
-- 自己検証: `llmbench validate --only-sec|gen|write|med`（gold全成功・broken全失敗、LLM不要）
+- `model: auto` … `openai_compat.fetch_served_model()` inspects `/v1/models` to detect the currently loaded model automatically.
+  Report labels and result filenames adopt the actual model name (cleaned of `.gguf` suffixes via `runner._label_from_model`).
+- Dynamic Ollama … Unconfigured model names passed to `--model <name>` are resolved dynamically via `/api/tags` by `runner.resolve_model()`.
+- Ollama Connection Priority: `--ollama-host` > `OLLAMA_HOST` env > Ollama `base_url` in config > `http://localhost:11434`.
+- `base_url` Connection Priority: `--base-url` > config `base_url` (`${VAR}` supported) > client-type env (`OPENAI_BASE_URL` / `OLLAMA_HOST` / `CODEROUTER_BASE_URL`) > client-type default.
+- `--client-type openai|ollama|multiagent` allows direct connection without editing config
+  (e.g., `llmbench run --model auto --client-type openai --base-url http://localhost:8085/v1` to connect directly to llama.cpp,
+  or `--client-type multiagent --base-url http://localhost:8088` for CodeRouter).
+- `model: auto` supports multi-model selection via `auto_prefer: "<substring>"`. If omitted, selects the first entry and emits a warning.
+- Unset `${VAR}` references raise an explicit error (previous behavior: silently evaluated to empty string, leading to cryptic 401 errors).
+- Fixed labeling can be forced using `--label`. API key entries expand environment variables via `${VAR}`.
 
-### 10.4 config.yaml 追加キー
+### 9.5 Operational Considerations
+
+- **Multi-run executions multiply disk and time requirements by N**. Because artifact output folders only write out 1 representative attempt, disk growth is controlled, but raw log text accumulates.
+- Interpret pass@k as described in 9.1. Do not mistake `avg_pass_at_k` for overall generalization ability.
+- Report tables include extra columns (Usability Tier, Reliability). Ensure automated parsers are updated (see Migration Notes in Section 7).
+
+---
+
+## 10. Multi-Domain Evaluation (Grader Extension)
+
+This subsystem expands evaluation capabilities beyond coding by introducing **pluggable graders**.
+For full design specifications (scoring equations, output contracts, validation requirements), consult [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md).
+This section acts as an operational reference. Usage guides available in `USAGE.md`; executive summary in `CHANGES.md`.
+
+### 10.1 Grader Mechanism & Backward Compatibility
+
+Each grader exposes `build_prompt()` (output structure instructions) and `evaluate()` (scoring execution), normalizing results into a **standard `GraderEval` structure** (`resolved: bool`, `quality_score: 0-100`, `components`, `fail_reason`, etc.).
+Thanks to this normalization, `_aggregate_attempts`, `combined_score`, pass@k, usability, and certification pipelines operate **without any code changes**.
+
+- Task ledger records omitting the `grader` property default to `code` (wrapping the legacy execution pipeline).
+- Executing runs using only default ledgers (`tasks.jsonl`) produces results, scores, and `validate` passes **identical to legacy releases**.
+- Grader modules are maintained inside `llmbench/graders/` (`__init__.py` registry + `GradeCtx`/`GraderEval`, `checks.py`, `code.py`, `detection.py`, `constraint.py`, `judge.py`, `qa.py`).
+
+### 10.2 Overview of the 4 Domains
+
+| Domain   | Grader       | Ledger              | Flags                           | Scoring Logic                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------- | ------------ | ------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| security | `detection`  | `tasks_sec.jsonl`   | `--with-sec` / `--only-sec`     | Scores JSON findings array following `--- FINDINGS ---` against gold labels using Precision / Recall / **F1**. `resolved = F1 >= pass_f1` (default 0.67). Includes **clean decoy tasks** with empty gold finding arrays to penalize false positive over-detection.                                                                                                                                                                                        |
+| general  | `constraint` | `tasks_gen.jsonl`   | `--with-gen` / `--only-gen`     | Evaluates response text following `--- ANSWER ---` programmatically against `checks.json` (IFEval checks: word_count, line_count, char_count, contains, not_contains, starts_with, ends_with, equals, regex, json_valid, json_path). `resolved = all checks pass` (`pass_ratio` default 1.0), `quality = pass rate × 100`.                                                                                                                                |
+| writing  | `judge`      | `tasks_write.jsonl` | `--with-write` / `--only-write` | **Experimental**. Evaluates deterministic `hard_constraints` in `rubric.json` (using constraint check kinds) + evaluation criteria + `pass_score`. When a judge model is configured (`quality.judge.enabled`), averages 0–10 score across `seeds` runs (`quality = score × 10`, `resolved = score >= pass_score AND hard constraints pass`). When judge is disabled, evaluates deterministically on hard constraints alone (used by `llmbench validate`). |
+| medical  | `qa`         | `tasks_med.jsonl`   | `--with-med` / `--only-med`     | **Reference value**. `gold.json` defines multiple choice `{"mode":"mcq","answer":"C"}` or keyword matching `{"mode":"keyword","all":[...],"any":[...]}`. Gold keywords include **both English and Japanese allowed terms**, enabling valid evaluation for Japanese models evaluated with `--lang ja`.                                                                                                                                                     |
+
+### 10.3 CLI Options
+
+Shares the same flag architecture as `--with-l6`/`--with-l7`/`--only-l6`/`--only-l7`.
+
+- `--with-sec` / `--with-gen` / `--with-write` / `--with-med` … Appends domain task ledgers onto default tasks
+- `--only-sec` / `--only-gen` / `--only-write` / `--only-med` … Excludes default tasks to execute specified domain exclusively
+- `certify --merge` supports results files containing multi-domain evaluations
+- Self-validation: `llmbench validate --only-sec|gen|write|med` (verifies all gold pass and all broken fail without LLM inference)
+
+### 10.4 `config.yaml` Additional Keys
 
 ```yaml
 quality:
-  judge: {enabled: false, judge_model: local-openai, seeds: 1}   # writing(judge grader) の採点モデル
+    judge: { enabled: false, judge_model: local-openai, seeds: 1 } # Judge scoring model for writing domain
 graders:
-  detection: {pass_f1: 0.67}
-  constraint: {pass_ratio: 1.0}
-  judge: {pass_score: 7.0}
+    detection: { pass_f1: 0.67 }
+    constraint: { pass_ratio: 1.0 }
+    judge: { pass_score: 7.0 }
 certify_domains:
-  security: {min_success: 0.6, min_combined: 60}
-  general:  {min_success: 0.7, min_combined: 65}
-  writing:  {min_success: 0.5, min_combined: 55, experimental: true}
-  medical:  {min_success: 0.6, min_combined: 60, reference: true}
+    security: { min_success: 0.6, min_combined: 60 }
+    general: { min_success: 0.7, min_combined: 65 }
+    writing: { min_success: 0.5, min_combined: 55, experimental: true }
+    medical: { min_success: 0.6, min_combined: 60, reference: true }
 ```
 
-### 10.5 certify のドメイン出力
+### 10.5 `certify` Domain Output
 
-非コーディングドメインを測定した results.json を渡すと、`certify` は通常のtier(L1-L7)認証に加えて
-以下を出力する:
+When supplied with a `results.json` containing multi-domain evaluations, `certify` outputs domain-specific diagnostics in addition to tier certifications (L1–L7):
 
-- **ドメイン別テーブル**: ドメインごとの平均success率/平均combined/ゲート合否（`certify_domains`のしきい値）
-- **バランス指数**: coding + 非experimentalドメイン（writing/medicalは既定除外）の平均combinedの
-  **調和平均**。1ドメインだけ弱い「一芸特化」モデルを算術平均より強く減点する
-- **医療detail readout**: 全体正答率 + 難易度別（med_basic/med_std/med_hard）正答率。5択MCQのチャンス
-  正答率が約20%であること、医療は臨床的妥当性の保証ではなく**参考値**であることを併記
+- **Domain Summary Table**: Average success rate, average combined score, and gate status (`certify_domains` thresholds) per domain.
+- **Balance Index**: Synthesizes normalized average combined scores across coding and non-experimental domains (writing/medical excluded by default) using **harmonic mean**. Heavily penalizes models with single-domain specializations compared to arithmetic averaging.
+- **Medical Detail Readout**: Displays overall accuracy alongside difficulty breakdowns (med_basic / med_std / med_hard). Explicitly highlights that 5-choice MCQ baseline chance accuracy is ~20% and clarifies that medical scores represent **reference metrics** rather than guarantees of clinical validity.
 
-`report.md` にも「🌐 ドメイン別」サマリ節が追加される。出力例と詳しい読み方は `USAGE.md` を参照。
+Adds a "🌐 Domain Summary" section to generated `report.md` outputs. See `USAGE.md` for sample outputs and detailed interpretation rules.
 
-### 10.6 運用上の注意
+### 10.6 Operational Considerations
 
-- writing/medical のゲート閾値は暫定（未較正）。`certify.py` の `DEFAULT_DOMAIN_GATES` / `DEFAULT_MED_GATES`、
-  もしくは `config.yaml` の `certify_domains:` で調整する。
-- judge を有効化する場合、self-preference回避のため候補モデルとは別系統の `judge_model` を推奨。
-- 医療タスク（m01–m24）は薬理/循環器/救急・第一選択/内分泌/感染症/腎・生理/神経/小児/産婦人科/検査・中毒の
-  10領域、難易度 med_basic 7問 / med_std 11問 / med_hard 6問。全問ゴールドは独立にファクトチェック済み。
-- ドメインタスクの一覧・ディレクトリ構成・goldスキーマは `TASKS.md` を参照。
+- Gate thresholds for writing and medical domains are provisional (uncalibrated). Adjust in `DEFAULT_DOMAIN_GATES` / `DEFAULT_MED_GATES` within `certify.py` or under `certify_domains:` in `config.yaml`.
+- When judge scoring is enabled, select a `judge_model` distinct from the candidate model family to avoid self-preference biases.
+- Medical tasks (m01–m24) span 10 clinical fields (Pharmacology, Cardiology, Emergency/First-line, Endocrinology, Infection, Nephrology/Physiology, Neurology, Pediatrics, OB/GYN, Toxicology) across 7 med_basic, 11 med_std, and 6 med_hard tasks. All gold keys have been independently fact-checked.
+- Refer to `TASKS.md` for complete task inventories, directory structures, and gold schema definitions.
 
 ---
 
-## 11. クラウドLLM（ホスト型API）の評価手順
+## 11. Evaluation Procedures for Cloud LLMs (Hosted APIs)
 
-本書の他章はローカルLLM（llama.cpp / Ollama）を主眼に書いているが、**OpenAI互換のホスト型API**も
-**同一パイプライン**で評価できる。採点側（patchパース → sandbox pytest → ruff/radon → combined）は
-モデルの所在に依存しないため、`certify` / `compare` / pass@k / usability もそのまま使える。
+While other chapters focus primarily on local LLMs (llama.cpp / Ollama), **OpenAI-compatible hosted APIs** can be evaluated using the **exact same pipeline**. The evaluation stack (patch parsing → sandbox pytest → ruff/radon → combined score calculation) operates independently of model location, making `certify`, `compare`, pass@k, and usability tiers fully compatible.
 
-ローカルとの違いは実質 **3点**：**①実モデル名の明示**・**②APIキー**・**③コストとレート制限**。
-クライアント実装は `type: openai`（`openai_compat.OpenAICompatClient`、Bearer認証 + `/v1/chat/completions`）で共通。
+Key differences relative to local models boil down to **3 points**: **① Explicit real model names**, **② API key management**, and **③ Cost/rate limit controls**. Client connections use `type: openai` (`openai_compat.OpenAICompatClient`, Bearer authentication + `/v1/chat/completions`).
 
-> クラウド生成物の扱い: artifacts の `llm_output.txt` には**プロンプト全文**が保存される。`.gitignore`（4.2）で
-> `results/` を除外し、社外APIへ送る内容がタスクissueに限られる前提で運用する。
+> Handling Cloud Artifacts: Artifact `llm_output.txt` files preserve **full task prompts**. Keep `results/` excluded in `.gitignore` (4.2) and ensure prompt contents sent to third-party endpoints conform to organizational policy.
 
-### 11.1 共通手順（config方式・推奨）
+### 11.1 Common Setup (Config Approach - Recommended)
 
-**認証が必要なクラウドAPIはこの方式を使う。** APIキーは `${VAR}` で環境変数から展開され、コードにも
-結果ファイルにも平文で残らない。
+**Use this approach for cloud APIs requiring authentication.** API keys expand from environment variables via `${VAR}`, preventing plain-text exposure in code or result files.
 
-1. `config.yaml` の `models:` にエントリを追加（`base_url` は `/v1` などOpenAI互換パスまで含める。`model` は
-   **実モデル名を明示**し `auto` にしない）。
-2. APIキーを `export` で環境変数に渡す（**configへ直書きしない**）。`${VAR}` 未設定時は明確なエラーで停止する。
-3. `llmbench run --model <キー名>` で実行。`--runs` / `--tasks` / `--lang` / `--with-*` はローカルと同じく併用可。
-   結果ファイル名は `--model` のキー名で決まる。
+1. Add a model entry under `models:` in `config.yaml` (set `base_url` to the OpenAI-compatible endpoint path ending in `/v1`. Specify the **exact model name** explicitly in `model` rather than `auto`).
+2. Export the API key via environment variables (**never hardcode keys inside `config.yaml**`). Unset `${VAR}` references trigger explicit error stops.
+3. Run `llmbench run --model <key_name>`. Flags such as `--runs`, `--tasks`, `--lang`, and `--with-*` work identically to local executions. Result file names take the model key name specified in `--model`.
 
-> ⚠️ `--client-type openai --base-url ...` の直指定（config編集レス）は、**`api_key` が既定の `sk-local`
-> ダミーになる**ため認証付きクラウドでは 401 になる。認証が要るクラウドは必ず config 方式（`api_key: ${VAR}`）を使う。
+> ⚠️ Direct inline parameters (`--client-type openai --base-url ...`) without config entries fallback to a default dummy API key (`sk-local`), triggering 401 errors on authenticated cloud endpoints. Authenticated cloud APIs must use the config-driven approach (`api_key: ${VAR}`).
 
-### 11.2 プロバイダ別サンプル
+### 11.2 Provider-Specific Examples
 
-いずれも `type: openai`（OpenAI互換）で接続する。**Coding Plan は専用エンドポイント＋専用キー**を使わないと
-プラン枠ではなく従量課金に落ちるため、下表のとおり厳密に合わせること。
+Connect via `type: openai` (OpenAI-compatible protocol). **Coding Plans require designated endpoints and keys**; otherwise, requests fall back to pay-as-you-go billing rather than subscription quota allowances.
 
-| 項目 | Alibaba Cloud (Model Studio) Qwen 有料プラン (token-plan) | z.ai GLM Coding Plan |
-|---|---|---|
-| base_url (OpenAI互換) | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`（例は ap-southeast-1。リージョンは発行先に合わせる） | `https://api.z.ai/api/coding/paas/v4` |
-| 主モデル名 | `qwen3.7-max` | `glm-5.2` |
-| 代替モデル | `qwen3.7-plus` / `qwen3.6-plus` / `qwen3.6-flash`（qwen3-coder系はToken Plan非提供） | `glm-4.7` / `glm-5.1` |
-| APIキー | **プラン専用キー `sk-sp-xxxx`**（通常の `sk-xxxx` ではない） | z.ai APIキー |
-| キー発行元 | Model Studio コンソール → プランページ | z.ai コンソール |
-| 誤設定時の挙動 | 通常キー/通常エンドポイントだと従量課金に落ちる | 通常 `paas/v4` / `anthropic` は別課金・別プロトコル |
+| Setting                      | Alibaba Cloud (Model Studio) Qwen Token-Plan                                                                                                                                             | z.ai GLM Coding Plan                                                         |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| base_url (OpenAI-compatible) | `[https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1](https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1)` (Region matched to issuance endpoint) | `[https://api.z.ai/api/coding/paas/v4](https://api.z.ai/api/coding/paas/v4)` |
+| Primary Model Name           | `qwen3.7-max`                                                                                                                                                                            | `glm-5.2`                                                                    |
+| Alternate Models             | `qwen3.7-plus` / `qwen3.6-plus` / `qwen3.6-flash` (qwen3-coder family not available under Token Plan)                                                                                    | `glm-4.7` / `glm-5.1`                                                        |
+| API Key                      | **Plan-specific key `sk-sp-xxxx**`(Not standard`sk-xxxx`)                                                                                                                                | z.ai API Key                                                                 |
+| Key Source                   | Model Studio Console → Subscription Page                                                                                                                                                 | z.ai Console                                                                 |
+| Behavior on Misconfiguration | Standard key or endpoint falls back to pay-as-you-go billing                                                                                                                             | Standard `paas/v4` / `anthropic` incurs separate billing/protocols           |
 
-`config.yaml` サンプル（`models:` に追記）:
+`config.yaml` snippet (add under `models:`):
 
 ```yaml
 models:
-  # ── Alibaba Cloud (Model Studio) Qwen3 Coding Plan ──────────────
-  qwen-coding:
-    type: openai
-    base_url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"  # 発行リージョンの token-plan 専用ドメイン (compatible-mode/v1)
-    model: "qwen3.7-max"        # Token Plan提供モデル。代替: qwen3.7-plus / qwen3.6-plus / qwen3.6-flash
-    api_key: "${DASHSCOPE_CODING_API_KEY}"   # ★プラン専用キー sk-sp-xxxx（通常の sk-xxxx ではない）
-    temperature: 0.2
-    max_tokens: 24576                # reasoning出力に備え大きめ
-    timeout: 600
+    # ── Alibaba Cloud (Model Studio) Qwen3 Coding Plan ──────────────
+    qwen-coding:
+        type: openai
+        base_url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" # Dedicated maas domain (compatible-mode/v1) for issued region
+        model: "qwen3.7-max" # Token Plan supported model. Alternates: qwen3.7-plus / qwen3.6-plus / qwen3.6-flash
+        api_key: "${DASHSCOPE_CODING_API_KEY}" # ★ Dedicated plan key sk-sp-xxxx (Not standard sk-xxxx)
+        temperature: 0.2
+        max_tokens: 24576 # Large token limit to accommodate reasoning output
+        timeout: 600
 
-  # ── z.ai GLM Coding Plan ────────────────────────────────────────
-  glm-coding:
-    type: openai
-    base_url: "https://api.z.ai/api/coding/paas/v4"   # Coding Plan専用のOpenAI互換パス
-    model: "glm-5.2"                 # 代替: glm-4.7
-    api_key: "${ZAI_API_KEY}"
-    temperature: 0.2
-    max_tokens: 24576
-    timeout: 600
+    # ── z.ai GLM Coding Plan ────────────────────────────────────────
+    glm-coding:
+        type: openai
+        base_url: "https://api.z.ai/api/coding/paas/v4" # OpenAI-compatible path for Coding Plan
+        model: "glm-5.2" # Alternate: glm-4.7
+        api_key: "${ZAI_API_KEY}"
+        temperature: 0.2
+        max_tokens: 24576
+        timeout: 600
 ```
 
-環境変数（キーは `export` で渡す。config直書き禁止）:
+Environment variable configuration (pass keys via `export`; do not hardcode in config files):
 
 ```bash
-export DASHSCOPE_CODING_API_KEY=sk-sp-...   # Model Studio コンソール → プランページで発行
-export ZAI_API_KEY=...                        # z.ai APIキー
+export DASHSCOPE_CODING_API_KEY=sk-sp-...   # Issued in Model Studio Console → Plan Page
+export ZAI_API_KEY=...                        # z.ai API key
+
 ```
 
-疎通確認 → 本測定:
+Connectivity verification followed by benchmark run:
 
 ```bash
-# まず1タスク×1回で 課金・接続・キー を確認
+# Verify connectivity, billing, and API key via 1 task x 1 run
 llmbench run --model qwen-coding --runs 1 --tasks t001
 llmbench run --model glm-coding  --runs 1 --tasks t001
 
-# 問題なければ本測定（pass@k / 成功率）
+# Execute full evaluation run
 llmbench run --model qwen-coding --runs 3
 llmbench run --model glm-coding  --runs 3
+
 ```
 
 > [!NOTE]
-> z.ai は Claude Code 向けに **Anthropic互換エンドポイント**（`https://api.z.ai/api/anthropic`、
-> `ANTHROPIC_AUTH_TOKEN`）も提供するが、llmbench は OpenAIプロトコルのため上表の `coding/paas/v4` を使う。
-> モデル名・エンドポイント・キー形式はプラン改定で変わるため、**初回は必ずコンソールの最新表記で確認**すること
-> （本節の値は2026年時点の各社公式ドキュメント記載）。
+> While z.ai provides **Anthropic-compatible endpoints** (`[https://api.z.ai/api/anthropic](https://api.z.ai/api/anthropic)`, `ANTHROPIC_AUTH_TOKEN`) for tools like Claude Code, llmbench uses the OpenAI-compatible protocol via `coding/paas/v4` above.
+> Endpoint schemas, model names, and key structures evolve with provider plan updates; **always verify specifications against vendor developer portals**. The values in this section are based on official vendor documentation as of 2026.
 
 > [!IMPORTANT]
-> **DashScope の接続方式に注意（純正SDK ≠ OpenAI互換）。** Alibaba公式の Python 例
-> （`from dashscope import Generation` / `dashscope.base_http_api_url=".../api/v1"`）は **DashScope 純正SDK**
-> の呼び方で、`/api/v1` は独自プロトコルのパス。llmbench は OpenAI互換HTTP（`/chat/completions` + Bearer）で
-> 叩くため、**同じ `/api/v1` は使えない**。用途別に次のパスを使い分ける:
+> **Pay attention to DashScope connection protocol paths (Native SDK vs. OpenAI Compatible).**
+> Alibaba's Python SDK examples (`from dashscope import Generation` / `dashscope.base_http_api_url=".../api/v1"`) use the **DashScope Native SDK** protocol via `/api/v1`. Because llmbench communicates over standard OpenAI HTTP APIs (`/chat/completions` + Bearer token), **do not use `/api/v1**`. Use the correct path based on your account type:
+| Protocol Type | base_url | Key Format | Usage |
+| --- | --- | --- | --- |
+| Native SDK | `[https://dashscope-intl.aliyuncs.com/api/v1](https://dashscope-intl.aliyuncs.com/api/v1)`|`sk-xxxx`| DashScope SDK exclusive (Unsupported in llmbench) |
+| OpenAI Compatible (Pay-as-you-go) |`[https://dashscope-intl.aliyuncs.com/compatible-mode/v1](https://dashscope-intl.aliyuncs.com/compatible-mode/v1)`|`sk-xxxx`| General pay-as-you-go API calls outside Coding Plan |
+| OpenAI Compatible (Coding Plan) |`[https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1](https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1)`|`sk-sp-xxxx` | Dedicated subscription plan endpoints (Recommended) |
 >
-> | 接続方式 | base_url | キー | 用途 |
-> |---|---|---|---|
-> | 純正SDK | `https://dashscope-intl.aliyuncs.com/api/v1` | `sk-xxxx` | dashscope SDK専用（llmbench非対応） |
-> | OpenAI互換・一般 | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `sk-xxxx` | Coding Plan枠を使わず従量で測る |
-> | OpenAI互換・プラン専用 | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | `sk-sp-xxxx` | プラン枠で測る（本節の推奨・専用 maas ドメイン） |
->
-> 一般API（従量・Coding Plan外）で測る場合の例。**`/api/v1` ではなく `compatible-mode/v1`** を指す:
+> Example for general pay-as-you-go evaluation (**uses `compatible-mode/v1` instead of `/api/v1**`):
 >
 > ```yaml
->   qwen-general:
+> qwen-general:
 >     type: openai
->     base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"  # 純正SDKの /api/v1 とは別
->     model: "qwen3.7-max"        # 一般APIなら qwen3-coder-plus 等コーダー系も選べる
->     api_key: "${DASHSCOPE_API_KEY}"  # 通常キー sk-xxxx（Coding Plan枠は使わない）
+>     base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1" # Distinct from native SDK /api/v1
+>     model: "qwen3.7-max" # Allows qwen3-coder-plus family on pay-as-you-go
+>     api_key: "${DASHSCOPE_API_KEY}" # Standard key sk-xxxx
 >     temperature: 0.2
 >     max_tokens: 24576
 >     timeout: 600
 > ```
->
-> Anthropic互換（Claude Code 等のツール向け）は `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic/v1/messages`。llmbench は OpenAI互換のため使わない。
 
 > [!WARNING]
-> **モデルはプランの提供リストから選ぶ。** Token Plan が提供するのは `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-plus` / `qwen3.6-flash` / `glm-5.x` / `kimi-k2.x` / `deepseek-*` 等で、
-> **`qwen3-coder-plus` などコーダー専用モデルは Token Plan には無い**（指定すると 404）。汎用フラッグシップ `qwen3.7-max` 等を使う。
-> なお `enable_thinking=true` を明示した場合のみ OpenAI互換では `stream=true` が要求される。llmbench は `enable_thinking` を送らないため既定の非思考動作で通る（明示的に思考出力を測りたい場合のみクライアント改修が要る）。
+> **Select models from vendor plan availability lists.** Token Plan subscriptions support models including `qwen3.7-max`, `qwen3.7-plus`, `qwen3.6-plus`, `qwen3.6-flash`, `glm-5.x`, `kimi-k2.x`, and `deepseek-*`.
+> **Coder-specific models like `qwen3-coder-plus` are not available under Token Plan subscriptions** (requesting them returns 404 errors). Use flagship general models like `qwen3.7-max`.
+> Note that OpenAI-compatible endpoints require `stream=true` only when `enable_thinking=true` is explicitly passed. Because llmbench does not pass `enable_thinking`, standard non-thinking model requests succeed out of the box.
 
-### 11.3 コスト・レート制限・信頼性
+### 11.3 Cost, Rate Limits, and Reliability
 
-有料APIでは**試行回数がそのまま費用**になる。次の順で調整する。
+With paid cloud APIs, **execution runs scale API costs linearly**. Tune parameters using the guidelines below:
 
-| 項目 | 効果 | 目安 |
-|---|---|---|
-| `--runs N` | リクエスト数（≒費用）が N 倍。pass@k / 成功率の精度は上がる | 有料は 3 前後から。まず `--runs 1` で疎通 |
-| `--concurrency N` | 試行を N 並列で投げ総時間短縮 | プロバイダの**レート上限に合わせる**。429 が出たら下げる |
-| `max_tokens` | 上限が小さいと難タスクで生成途中停止 → `patch parse failed` | 非推論=4096 / 推論(reasoning)系=24576 以上 |
-| `timeout` | 混雑時の切断回避 | 長考モデルは 600 以上 |
-| `--tasks` で絞る | 対象タスクを限定して費用・時間を圧縮 | 較正・疎通は一部tierだけ実行 |
+| Parameter                  | Impact                                                                | Recommendation                                                           |
+| -------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `--runs N`                 | Multiplies total API calls (and cost) by N; increases pass@k accuracy | Set N ≈ 3 for paid cloud endpoints. Run `--runs 1` first to verify setup |
+| `--concurrency N`          | Dispatches N requests in parallel to reduce runtime                   | **Align with vendor rate limits (RPM)**. Reduce N if 429 errors occur    |
+| `max_tokens`               | Low token limits cause mid-generation cutoffs → `patch parse failed`  | Set ≥ 4096 for standard models; ≥ 24576 for reasoning models             |
+| `timeout`                  | Prevents request drops during high latency or peak load               | Set ≥ 600 seconds for deep reasoning models                              |
+| Task Filtering (`--tasks`) | Constrains evaluated tasks to manage cost and runtime                 | Test initial setup on specific subsets or tiers                          |
 
-- 手順: **`llmbench validate`（LLM不要）でパイプライン疎通 → `--runs 1 --tasks <少数>` でキー・課金確認 → 本測定**。
-- レート制限(429)はタスク単位で `fail_reason` に出る。多発時は `--concurrency` を下げる。
-- クラウドは**サーバ側の並列起動設定は不要**（プロバイダが捌く）。`--concurrency` の上げ過ぎだけ 429 に注意。
+- Workflow: **Run `llmbench validate` (no LLM calls) to check local harness setup → Execute `--runs 1 --tasks <subset>` to verify cloud connectivity/billing → Proceed to full benchmark evaluation**.
+- Rate limit errors (HTTP 429) appear per task under `fail_reason`. Reduce `--concurrency` if 429 errors persist.
+- Cloud API execution requires **no local server concurrency tuning** (handled provider-side). Monitor local `--concurrency` settings to prevent HTTP 429 rate limit spikes.
 
-### 11.4 参照アンカーとしての併走（`compare`）
+### 11.4 Running Alongside as Reference Anchors (`compare`)
 
-ローカルモデルの位置づけを見るため、クラウドの強モデルを**参照アンカー**として併走させ、`compare` で
-1枚に並べる（9.3）。
+To benchmark local model performance against frontier cloud models, run a strong cloud model as a **reference anchor** and visualize side-by-side positioning in a unified report via `compare` (Section 9.3).
 
 ```bash
 export OPENAI_API_KEY=sk-...
-llmbench run --model local-openai --output results     # 手元のローカルモデル
-llmbench run --model qwen-coding  --output results     # クラウド参照アンカー
-llmbench compare results/*_results.json                # → comparison_<stamp>.md
+llmbench run --model local-openai --output results     # Target local model
+llmbench run --model qwen-coding  --output results     # Cloud reference anchor
+llmbench compare results/*_results.json                # Generates comparison_<stamp>.md
+
 ```
 
-### 11.5 チェックリスト
+### 11.5 Checklist
 
-- [ ] `base_url` に `/v1`（またはプロバイダ指定のOpenAI互換パス）を含めたか
-- [ ] `model` を**実モデル名**で固定したか（`auto` にしていないか）
-- [ ] **プラン専用キー**（Qwen=`sk-sp-`）と**専用エンドポイント**を使ったか（従量課金への誤流入回避）
-- [ ] APIキーを `${VAR}` + `export` で渡したか（configへ直書きしていないか）
-- [ ] `--runs 1 --tasks <少数>` で費用と疎通を確認してから本測定に移ったか
-- [ ] `--concurrency` をプロバイダのレート上限内に収めたか（429が出ていないか）
-- [ ] 推論(reasoning)系モデルで `max_tokens` を十分大きく取ったか（途中停止による parse 失敗の回避）
+- [ ] Included `/v1` (or provider-specified OpenAI-compatible path) in `base_url`
+- [ ] Explicitly specified real model names in `model` (avoided `auto` for cloud configs)
+- [ ] Configured **plan-specific API keys** (Qwen = `sk-sp-`) and **dedicated endpoints** (prevents unintended pay-as-you-go billing)
+- [ ] Exported API keys via `${VAR}` and environment variables (avoided hardcoding in config)
+- [ ] Verified connectivity and cost via `--runs 1 --tasks <subset>` prior to full benchmark runs
+- [ ] Adjusted `--concurrency` to operate within provider rate limits (avoiding HTTP 429 errors)
+- [ ] Allocated sufficient `max_tokens` allowance for reasoning-heavy models (preventing mid-generation parse failures)

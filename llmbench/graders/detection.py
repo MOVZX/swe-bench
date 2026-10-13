@@ -1,11 +1,11 @@
-"""検出 grader (セキュリティ/解析).
+"""Detection grader (Security / Analysis).
 
-モデルに脆弱性・侵害の「検出・診断」をさせ、gold ラベルとの
-precision / recall / F1 で採点する。修正はしない。
+Prompts the model to perform security vulnerability/intrusion "detection & diagnosis",
+grading output via precision / recall / F1 against gold labels. Does not patch code.
 
-出力契約: `--- FINDINGS ---` の後に JSON 配列
+Output Contract: JSON array after a `--- FINDINGS ---` line
   [{"type": "...", "location": "...", "evidence": "..."}]
-デコイ (gold.findings==[]) では予測 0 件が正解 (過検出を罰する)。
+For decoys (gold.findings==[]), zero predicted findings is correct (penalizes false positives/over-detection).
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def _load_gold(task) -> dict:
 
 
 def _first_json_array(text: str):
-    """テキスト中の最初の妥当な JSON 配列を返す (無ければ None)."""
+    """Returns the first valid JSON array in text (or None if absent)."""
     i = 0
     while True:
         start = text.find("[", i)
@@ -63,7 +63,7 @@ def _first_json_array(text: str):
 
 
 def _extract_findings(raw: str):
-    """モデル出力から findings 配列を抽出する. (list, parse_ok, error)."""
+    """Extracts findings array from model output. Returns (list, parse_ok, error)."""
     text = _strip_control_tokens(raw or "")
     if not text.strip():
         return [], False, "empty output"
@@ -164,7 +164,7 @@ class DetectionGrader(Grader):
         return f"--- FINDINGS ---\n{body}"
 
     def mock_broken(self, task) -> str:
-        # 架空の finding を1件出す → デコイでは FP、非デコイでは recall0 → 必ず失敗。
+        # Outputs 1 bogus finding -> FP for decoys, recall 0 for non-decoys -> always fails.
         bogus = [{"type": "made-up issue", "location": "nowhere",
                   "evidence": "zzzzz nonexistent token qqqqq"}]
         return "--- FINDINGS ---\n" + json.dumps(bogus, ensure_ascii=False)

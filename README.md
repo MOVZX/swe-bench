@@ -2,40 +2,40 @@
 
 # 🧪 llmbench
 
-**ローカルLLMは本当に"使える"のか? — 機能正確性 × コード品質で測るSWE-Bench風ベンチマーク**
+**Are Local LLMs Truly "Usable"? — An SWE-Bench Style Benchmark Measuring Functional Correctness × Code Quality**
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#-contributing)
 
-「テストは通るが汚いコード」と「綺麗で安全なコード」のトレードオフを、<br>
-ローカル環境で**ガチ検証**するためのフルスクラッチ・フレームワーク。<br>
-さらに **セキュリティ検出 / 指示追従 / 創作 / 医療QA** のマルチドメイン評価にも対応。
+A built-from-scratch framework designed to **rigorously evaluate** the trade-off between <br>
+"tests pass but code is messy" and "clean, maintainable, and safe code" in a local environment. <br>
+Now extended to support multi-domain evaluations: **Security Detection / Instruction Following / Writing / Medical QA**.
 
-[特徴](#-特徴) • [クイックスタート](#-クイックスタート) • [スコアリング](#-スコアリング) • [マルチドメイン](#-マルチドメイン評価コーディング以外) • [タスク追加](#-タスクの追加) • [ロードマップ](#-ロードマップ)
+[Features](#-features) • [Quick Start](#-quick-start) • [Scoring](#-scoring) • [Multi-Domain](#-multi-domain-evaluation-non-coding) • [Adding Tasks](#-adding-tasks) • [Roadmap](#-roadmap)
 
 </div>
 
 ---
 
-## ✨ 特徴
+## ✨ Features
 
-- 🎯 **機能的正確性** — SWE-Bench風。バグレポート + ソースをLLMに渡し、patch適用 → 隠しテスト(pytest)で resolved 判定
-- 🧹 **コード品質レイヤー** — Ruff (lint密度) / radon (保守性指数・循環的複雑度) / LLMレビュー採点 / SonarQube を重み付き合成
-- 🎲 **信頼性 (pass@k)** — `--runs N` で各タスクをN回試行し、成功率(pass@1)・pass@k・フレ(flaky)を計測。「1回成功＝使える」ではなく**安定して使えるか**を測る
-- 🧭 **usability判定** — 信頼性×品質から各タスクを **🟢自律 / 🟡補助 / 🔴不可** に分類し、「実際どれくらい任せられるか」を提示
-- 🎓 **使えるライン認証 (`certify`)** — 難易度を tier(L1-L7) にマップし、tierごとの合格判定で「ここまでクリアできれば使える」を提示。**L4(expert)独立合格＝実務投入ライン**。最上位帯の頭打ちを測る **L7(grandmaster)** は天井評価帯。分割実行した複数 results.json は `certify --merge` で1つの認証に統合可
-- 🌐 **マルチドメイン評価** — コーディング以外も測る **pluggable grader**。**detection**(脆弱性/ログ検出＝F1採点＋過検出デコイ)・**constraint**(指示追従＝IFEval式の機械検証)・**judge**(創作＝rubric採点)・**qa**(医療QA＝日英アンサーキー)。`--with-sec/gen/write/med` で上乗せ、`certify` はドメイン別ゲート＋**バランス指数**(一芸特化を炙り出す)を出力。設計は [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md)
-- ⚖️ **複合スコア** — 動かないコードは0点。動くコードを成功率と品質で差別化
-- 🔌 **接続自在** — OpenAI互換API (llama.cpp / LM Studio / vLLM) と Ollama 両対応。**`model: auto`** でサーバのロード中モデルを自動採用（config編集不要）、Ollamaは**インストール済みモデルを動的に選択**
-- 🆚 **モデル横断比較** — `compare` で複数結果を1枚のランキング・マトリクスに。参照モデル(API)を併置して位置づけ
-- 🇯🇵 **日英issue同梱** — `--lang ja` で「language tax」(日本語指示による性能低下)を計測可能。医療QAなど日本語回答モデルも gold の日英許容語で正しく採点
-- ⚡ **速度計測** — タスク別レイテンシ / tok/s をレポートに自動記録
-- 📦 **同梱タスク40個（+任意20＋任意40）** — L1 easy 5 / L2 medium 5 / L3 hard 10 / **L4 expert 12 / L5 frontier 8**。さらに **L6 architect 20問 (t041–t060) を任意オプション (`--with-l6`) で**、**L7 grandmaster 40問 (t061–t100) を `--with-l7` で追加** でき (併用可)、上位帯の天井効果を破る。**`--only-l6`/`--only-l7`** で既定40問を除いてL6/L7だけを単体実行し（分割運用向け）、後日 `certify --merge` で結果を統合することも可能。frontier/architect/grandmaster は複数ファイル・回帰罠・性能制約(perf_timeout)を含み、issueは**症状ベース**で原因診断を要求。外部依存なし(stdlib-only)で即実行
-- 🛡️ **安全設計** — テストはLLMに非公開、patch書込先は既知ファイルに限定、元タスクは不変
+- 🎯 **Functional Correctness** — SWE-Bench style. Hands bug reports + source files to the LLM, applies generated patches → evaluates `resolved` state via hidden tests (pytest).
+- 🧹 **Code Quality Layer** — Weighted synthesis of Ruff (linting issue density), radon (Maintainability Index / Cyclomatic Complexity), LLM review scoring, and SonarQube metrics.
+- 🎲 **Reliability (pass@k)** — Runs each task $N$ times via `--runs N` to measure success rate (pass@1), pass@k, and flakiness. Evaluates whether a model is **consistently usable** rather than relying on a single lucky pass.
+- 🧭 **Usability Classification** — Classifies tasks into **🟢 Autonomous / 🟡 Assisted / 🔴 Unusable** based on reliability and quality to show actionable delegation bounds.
+- 🎓 **Usability Line Certification (`certify`)** — Maps difficulty levels to tiers (L1–L7) and evaluates tier pass/fail status independently to pinpoint capabilities. **Independent L4 (expert) pass = production-ready baseline**. Includes **L7 (grandmaster)** as a ceiling evaluation tier for top models. Multiple split runs can be consolidated into a single certificate via `certify --merge`.
+- 🌐 **Multi-Domain Evaluation** — Pluggable grader architecture extending evaluation beyond coding: **detection** (vulnerability/log detection evaluated via F1 + false positive decoy penalties), **constraint** (instruction following validated programmatically IFEval-style), **judge** (creative writing evaluated via rubric), and **qa** (medical QA matched against answer keys with JP/EN allowed terms). Enabled via `--with-sec/gen/write/med`. `certify` outputs domain-specific gates and a **Balance Index** (penalizing single-capability spikes). Full design specified in [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md).
+- ⚖️ **Composite Scoring** — Non-working code scores 0. Working code is differentiated by success rate and code quality.
+- 🔌 **Flexible Connectivity** — Compatible with OpenAI-compatible APIs (llama.cpp / LM Studio / vLLM) and Ollama. **`model: auto`** automatically adopts the server's currently loaded model (no config edits required); dynamically resolves installed Ollama models.
+- 🆚 **Cross-Model Comparison** — `compare` consolidates multiple result files into unified rankings and matrices alongside reference cloud API models.
+- 🇯🇵 **Dual-Language Issues (EN/JA)** — Supports `--lang ja` to measure "language tax" (performance degradation caused by Japanese instructions). Medical QA and Japanese models are correctly evaluated using JP/EN allowed terms in gold files.
+- ⚡ **Speed Benchmarking** — Automatically logs per-task latency and generation throughput (tokens/sec).
+- 📦 **40 Built-in Tasks (+20 Optional +40 Optional)** — L1 easy 5 / L2 medium 5 / L3 hard 10 / **L4 expert 12 / L5 frontier 8**. Optionally extendable with **L6 architect 20 tasks (t041–t060) via `--with-l6`** and **L7 grandmaster 40 tasks (t061–t100) via `--with-l7`** to break through score ceiling effects. Supports split execution via `--only-l6`/`--only-l7` (excluding default 40 tasks) with later consolidation via `certify --merge`. Frontier/Architect/Grandmaster tasks feature multi-file modifications, regression traps, and performance constraints (`perf_timeout`), presenting **symptom-based issues** that require root-cause diagnosis. Out-of-the-box execution using Python standard library only.
+- 🛡️ **Safety by Design** — Hidden tests are never exposed to the LLM, patch file modifications are strictly scoped to pre-approved files, and original task definitions remain immutable.
 
-## 🚀 クイックスタート
+## 🚀 Quick Start
 
 ```bash
 git clone https://github.com/zephel01/swe-bench.git
@@ -43,354 +43,338 @@ cd swe-bench
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# 1️⃣ 自己検証 (LLM不要 — モックでパイプライン全体を確認)
+# 1️⃣ Self-Validation (No LLM required — verifies entire pipeline via mock clients)
 llmbench validate
-llmbench validate --only-sec        # ドメインだけの自己検証もできる (sec/gen/write/med)
+llmbench validate --only-sec        # Domain-specific pipeline verification (sec/gen/write/med)
 
-# 2️⃣ config.yaml の base_url を自分の環境に。model は "auto" でOK（サーバのモデルを自動採用）
+# 2️⃣ Point base_url in config.yaml to your environment. Set model to "auto" (automatically detects loaded server model)
 
-# 3️⃣ 利用可能モデルを確認（config定義 + Ollama稼働モデル）
+# 3️⃣ Inspect available models (Configured models + active Ollama models)
 llmbench models
 
-# 4️⃣ 実行 (コーディング)
-llmbench run --model local-openai                 # 既定40タスク・1回
-llmbench run --model local-openai --runs 5        # 各タスク5回 → 成功率・pass@k
-llmbench run --model local-openai --with-l6 --runs 5  # L6(architect)20問を加えて計60タスク
-llmbench run --model local-openai --with-l7 --runs 5  # L7(grandmaster)40問を加えて計80タスク
-llmbench run --model local-openai --with-l6 --with-l7 --runs 5  # L6+L7を併用し計100タスク（天井評価）
-llmbench run --model local-openai --only-l6 --runs 5  # L6だけ単体実行(baseなし) → 後日 certify --merge で統合
-llmbench run --model local-openai --runs 5 --concurrency 5  # 試行を5並列で実行し総時間短縮(要: サーバを --parallel 5 -cb で起動)
-llmbench run --model qwen2.5-coder:7b --runs 5    # Ollamaの実モデル名を直接指定もOK
-llmbench run --model local-openai --tasks t021,t033 --lang ja   # 新tierだけ実行も可
+# 4️⃣ Execution (Coding Tasks)
+llmbench run --model local-openai                 # Default 40 tasks, 1 trial
+llmbench run --model local-openai --runs 5        # 5 trials per task → success rate & pass@k
+llmbench run --model local-openai --with-l6 --runs 5  # Adds L6 (architect) 20 tasks (60 total)
+llmbench run --model local-openai --with-l7 --runs 5  # Adds L7 (grandmaster) 40 tasks (80 total)
+llmbench run --model local-openai --with-l6 --with-l7 --runs 5  # Combines L6+L7 (100 total ceiling evaluation)
+llmbench run --model local-openai --only-l6 --runs 5  # Standalone L6 execution → consolidate later via certify --merge
+llmbench run --model local-openai --runs 5 --concurrency 5  # Runs 5 concurrent trials (requires server launched with --parallel 5 -cb)
+llmbench run --model qwen2.5-coder:7b --runs 5    # Direct specification of installed Ollama model names
+llmbench run --model local-openai --tasks t021,t033 --lang ja   # Run specific task subsets or tiers
 
-# 4️⃣' 実行 (マルチドメイン: コーディング以外)
-llmbench run --model local-openai --with-sec --with-gen --runs 5   # security/general を上乗せ
-llmbench run --model local-openai --only-sec --runs 5              # セキュリティ検出だけ単体実行
-llmbench run --model <医療モデル>  --only-med --lang ja --runs 5    # 医療QAだけ日本語で測定
+# 4️⃣' Execution (Multi-Domain Tasks: Non-Coding)
+llmbench run --model local-openai --with-sec --with-gen --runs 5   # Appends security and general domain ledgers
+llmbench run --model local-openai --only-sec --runs 5              # Standalone security detection execution
+llmbench run --model <medical_model>  --only-med --lang ja --runs 5    # Japanese medical QA benchmark
 
-# 5️⃣ 複数結果を横断比較
+# 5️⃣ Cross-Model Comparison
 llmbench compare results/*_results.json
 
-# 6️⃣ 使えるライン認証 (tier合格制 + ドメイン別 + バランス指数)
+# 6️⃣ Usability Line Certification (Tier-Based Pass System + Domain Gates + Balance Index)
 llmbench certify results/<stamp>_<model>_results.json
+
 ```
 
-サブコマンド: `list-tasks` / `models` / `run` / `compare` / `certify` / `validate`
+Subcommands: `list-tasks` / `models` / `run` / `compare` / `certify` / `validate`
 
-結果は `results/` に以下の3点で保存されます。
+Execution results are saved to `results/` across **3 items**:
 
-- `<stamp>_<model>_results.json` — スコア・集計 (機械可読、軽量)
-- `<stamp>_<model>_report.md` — 人が読むMarkdownレポート
-- `<stamp>_<model>_artifacts/<task_id>/` — **生成物そのもの**
-  - `llm_output.txt` … LLMの生出力 (パース失敗時の原因確認用)
-  - `generated/<path>` … 適用された生成コード / 予測ラベル・回答 (動作確認用)
-  - `test_output.txt` … pytest出力・採点詳細 (失敗の原因確認用)
+- `<stamp>_<model>_results.json` — Scores and summary statistics (machine-readable, lightweight JSON)
+- `<stamp>_<model>_report.md` — Human-readable Markdown report
+- `<stamp>_<model>_artifacts/<task_id>/` — **Output artifacts**
+- `llm_output.txt` … Raw LLM text output (for root-cause analysis on parse failures)
+- `generated/<path>` … Extracted generated code / predicted labels & answers
+- `test_output.txt` … Pytest logs and evaluation details (for debugging failed tests)
 
-実行中のログにも、タスクごとに生成ファイル・コード冒頭・パース/テスト結果が出力されるので、その場で「ちゃんと動いているか」を確認できます。
+Console logs display files generated, code headers, and parse/test results per task in real time.
 
 > [!TIP]
-> 実行ログ・レポート・生成物の**読み解き方**やモデル比較の手順は [📘 利用ガイド (USAGE.md)](USAGE.md) を参照。
-
-<details>
-<summary>📄 レポート出力例 (--runs 5)</summary>
+> For detailed instructions on interpreting execution logs, reports, artifacts, and running model comparisons, consult the [📘 User Guide (USAGE.md)](USAGE.md).
 
 ```markdown
-# llmbench レポート: Qwopus3.6-27B-Coder-MTP-Q6_K
-Issue言語: `en` / タスク数: 20 / 試行: ×5
+# llmbench Report: Qwopus3.6-27B-Coder-MTP-Q6_K
 
-## サマリ
-| 指標 | 値 |
-|---|---|
-| ✅ Resolved率 | **95.0%** (19/20) |
-| 🎲 平均成功率 (pass@1, ×5) | **93.0%** |
-| 🔁 ≥1成功できたタスク | **95.0%** (19/20) |
-| 🏅 品質平均 (resolvedのみ) | **89.8 / 100** |
-| 🎯 Combined平均 | **88.2 / 100** |
+Issue Language: `en` / Tasks: 20 / Runs: ×5
 
-## 🧭 usability判定
-- 🟢 自律 17/20 (85%) / 🟡 補助 2/20 (10%) / 🔴 不可 1/20 (5%)
-> 総合推奨: おおむね自律。ただし🔴不可 1/20 (5%) は要注意
+## Summary
 
-| | Task | 判定 | 信頼性 | Quality | Combined | tok/s |
-|---|---|---|---|---|---|---|
-| ✅ | t007 | 🟡 補助 | 4/5 (成功率80%) | 100 | 80 | 111.9 |
-| ❌ | t020 | 🔴 不可 | 0/5 (成功率0%)  | 0   | 0  | 122.2 |
+| Metric                           | Value             |
+| -------------------------------- | ----------------- |
+| ✅ Resolved Rate                 | **95.0%** (19/20) |
+| 🎲 Avg Success Rate (pass@1, ×5) | **93.0%**         |
+| 🔁 Tasks Resolved ≥1 Time        | **95.0%** (19/20) |
+| 🏅 Quality Avg (Resolved Only)   | **89.8 / 100**    |
+| 🎯 Combined Avg                  | **88.2 / 100**    |
+
+## 🧭 Usability Classification
+
+- 🟢 Autonomous: 17/20 (85%) / 🟡 Assisted: 2/20 (10%) / 🔴 Unusable: 1/20 (5%)
+    > Recommendation: Generally Autonomous. Caution required for 🔴 Unusable tasks (1/20, 5%).
+
+|     | Task | Tier        | Reliability            | Quality | Combined | tok/s |
+| --- | ---- | ----------- | ---------------------- | ------- | -------- | ----- |
+| ✅  | t007 | 🟡 Assisted | 4/5 (Success Rate 80%) | 100     | 80       | 111.9 |
+| ❌  | t020 | 🔴 Unusable | 0/5 (Success Rate 0%)  | 0       | 0        | 122.2 |
 ```
 
-</details>
+## 📊 Scoring
 
-## 📊 スコアリング
+$$\text{combined} = \text{success\_rate} \times \left(0.5 + 0.5 \times \frac{\text{quality}}{100}\right) \times 100$$
 
-```
-combined = success_rate × (0.5 + 0.5 × quality / 100) × 100
-```
+Where `success_rate` represents trial accuracy (`0/1` for `--runs 1`; `0.0` to `1.0` for multi-run).
+**Reliability directly scales the overall score** (e.g., 60% success rate with quality 90 → $0.6 \times 95 = 57$ points).
 
-`success_rate` は試行の成功率（`--runs 1` なら resolved の 0/1、複数試行なら 0.0〜1.0）。
-**信頼性がそのままスコアに反映**される（例: 60%成功・品質90 → 0.6×95 = 57点）。
-
-| success_rate | quality | combined | 意味 |
-|---|---|---|---|
-| 0 (不可) | — | **0** | 動かないコードは品質に関わらず0点 |
-| 1.0 | 0 | **50** | 毎回動くが品質最低 |
-| 1.0 | 100 | **100** | 毎回動いて品質も完璧 |
-| 0.6 (flaky) | 90 | **57** | たまに失敗。信頼性で減点 |
+| success_rate | quality | combined | Meaning                                                         |
+| ------------ | ------- | -------- | --------------------------------------------------------------- |
+| 0 (Failed)   | —       | **0**    | Non-working code scores 0 regardless of quality metrics         |
+| 1.0          | 0       | **50**   | Passes functional tests every time, but code quality is minimal |
+| 1.0          | 100     | **100**  | Passes functional tests every time with perfect quality metrics |
+| 0.6 (Flaky)  | 90      | **57**   | Flaky completion; penalized for lower reliability               |
 
 > [!NOTE]
-> マルチドメインでも同じ式が使える。各 grader が `(resolved, quality)` に正規化して返すため、
-> detection は F1、constraint はチェック通過率、judge は rubric スコア、qa は正誤が
-> そのまま success/quality に写像され、pass@k・usability・certify を無改修で共有する。
+> Multi-domain graders map evaluation outcomes into normalized `(resolved, quality)` tuples.
+> Detection maps to F1, constraint to check pass rates, judge to rubric scores, and QA to answer accuracy, allowing pass@k, usability, and certification pipelines to be shared seamlessly without code modifications.
 
-### 信頼性 (pass@k) と usability判定
+### Reliability (pass@k) & Usability Classification
 
-`--runs N` で各タスクをN回試行し、**成功率(pass@1)** を主指標に、pass@k・フレ(flaky)を計測。
-さらに success_rate と quality からタスクを3ティアに分類する (しきい値は `config.yaml` の `usability:`):
+Runs each task $N$ times via `--runs N` to evaluate **success rate (pass@1)**, pass@k, and flakiness.
+Classifies tasks into 3 usability tiers based on `success_rate` and `quality` (thresholds configured under `usability:` in `config.yaml`):
 
-| ティア | 既定条件 | 意味 |
-|---|---|---|
-| 🟢 自律 | success ≥ 0.9 かつ quality ≥ 80 | レビューほぼ不要で任せられる |
-| 🟡 補助 | success ≥ 0.6 | レビュー前提なら使える |
-| 🔴 不可 | 上記未満 | この種のタスクには任せられない |
+| Usability Tier | Default Conditions             | Meaning                                                         |
+| -------------- | ------------------------------ | --------------------------------------------------------------- |
+| 🟢 Autonomous  | success ≥ 0.9 AND quality ≥ 80 | Tasks can be delegated autonomously with minimal review         |
+| 🟡 Assisted    | success ≥ 0.6                  | Suitable for completion provided human code review is performed |
+| 🔴 Unusable    | Below above criteria           | Tasks cannot be safely delegated to the model                   |
 
-### 🎓 使えるライン認証 (`certify`)
+### 🎓 Usability Line Certification (`certify`)
 
-usability判定が**タスク単位**なのに対し、`certify` は**モデル全体**を判定する。
-難易度を tier(L1-L7) にマップし、tierごとの平均成功率/combinedが gate を満たすかを
-**独立に**評価して「到達レベル」を出す。`llmbench certify results/<...>_results.json`。
+While usability classification operates **per task**, `certify` evaluates **overall model performance**.
+Maps task difficulties to tiers (L1–L7) and independently evaluates whether average success rates and combined scores pass tier gates: `llmbench certify results/<...>_results.json`.
 
-| Gate | 条件 (tier平均) | 意味 |
-|---|---|---|
-| L1 easy | success ≥ 90% | おもちゃ級は確実 |
-| L2 medium | success ≥ 85% | 仕様準拠の単純作業可 |
-| L3 hard | success ≥ 75% かつ combined ≥ 60 | 実務の単純〜中級バグ可 |
-| **L4 expert** | **success ≥ 60% かつ combined ≥ 55** | **✅ 使えるライン (監督付き実務投入)** |
-| L5 frontier | success ≥ 40% | フロンティア級 |
-| L6 architect | success ≥ 55% かつ combined ≥ 60 (暫定) | アーキテクト級・上位帯の分離 |
-| L7 grandmaster | success ≥ 35% かつ combined ≥ 55 (暫定) | グランドマスター級・天井評価帯 |
+| Gate           | Conditions (Tier Average)                     | Meaning                                                  |
+| -------------- | --------------------------------------------- | -------------------------------------------------------- |
+| L1 easy        | success ≥ 90%                                 | Basic toy tasks cleared                                  |
+| L2 medium      | success ≥ 85%                                 | Simple specification-compliant work cleared              |
+| L3 hard        | success ≥ 75% AND combined ≥ 60               | Simple to mid-level bug fixes cleared                    |
+| **L4 expert**  | **success ≥ 60% AND combined ≥ 55**           | **✅ Production-Ready Baseline (Supervised Deployment)** |
+| L5 frontier    | success ≥ 40%                                 | Frontier-level capability                                |
+| L6 architect   | success ≥ 55% AND combined ≥ 60 (Provisional) | Architect-level capability / Model separation            |
+| L7 grandmaster | success ≥ 35% AND combined ≥ 55 (Provisional) | Grandmaster-level capability / Ceiling evaluation tier   |
 
-**使えるライン = L4 を独立に合格**(下位tierの取りこぼしに左右されない)。
-閾値は `llmbench/certify.py` の `DEFAULT_GATES` で調整可能。L6 は `--with-l6`、L7 は `--with-l7`
-で測定した結果にのみ現れる(既定の40問評価では未測定)。L7 は「使えるラインの実務判定」ではなく
-最上位帯の頭打ちを検出する**天井評価帯**のため、L6 より低い `min_success` を設定している。
-L6/L7 の閾値はいずれも暫定で、実モデル較正後に確定する(L7 は未較正)。
-`--only-l6`/`--only-l7` で分割実行した場合は `certify --merge a.json b.json`
-(task_id後勝ちで合算) により1回の判定にまとめられる。
-`certify` はコーディング以外のドメインを測定していれば、**ドメイン別ゲート + バランス指数 +
-医療の難易度別正答率**も併せて出力する（[マルチドメイン](#-マルチドメイン評価コーディング以外)参照）。
+**Production-Ready Baseline = Independent L4 Pass** (unaffected by regressions in lower tiers).
+Gate thresholds can be tuned in `DEFAULT_GATES` inside `llmbench/certify.py`. L6 metrics appear when measured via `--with-l6`, and L7 via `--with-l7`. L7 acts as a **ceiling evaluation tier** to measure performance plateaus among top-tier models rather than practical delegation bounds.
+Provisional thresholds will be finalized following empirical calibrations.
+When running split evaluations via `--only-l6`/`--only-l7`, output files can be merged into a single certification via `certify --merge a.json b.json` (task IDs use last-wins logic).
+When non-coding domains are evaluated, `certify` also displays **domain-specific gates, Balance Index metrics, and medical accuracy breakdowns** (see [Multi-Domain](DESIGN_DOMAINS.md)).
 
-品質スコアの内訳 (重みは `config.yaml` で自由に変更):
+Quality Score Layers (Weights customizable in `config.yaml`):
 
-| レイヤー | 既定重み | 内容 |
-|---|---|---|
-| 🔍 Ruff | 0.4 | E/F/W/B/SIM/C4/S ルールのissue密度で減点 |
-| 🌀 radon | 0.3 | Maintainability Index + 最悪CCランクで減点 |
-| 🤖 LLMレビュー | 0.3 (任意) | 別LLMが0-10点でコードレビュー |
-| 📡 SonarQube | 任意 | サーバ稼働時のみ。重大度別減点 |
+| Evaluator Layer | Default Weight | Description                                                                 |
+| --------------- | -------------- | --------------------------------------------------------------------------- |
+| 🔍 Ruff         | 0.4            | Penalizes issue density across E/F/W/B/SIM/C4/S rules                       |
+| 🌀 radon        | 0.3            | Penalizes based on Maintainability Index + worst Cyclomatic Complexity rank |
+| 🤖 LLM Review   | 0.3 (Optional) | Code review scoring (0–10 scale) performed by an external LLM               |
+| 📡 SonarQube    | Optional       | Active SonarQube server integration; penalizes based on issue severity      |
 
-## 🌐 マルチドメイン評価（コーディング以外）
+## 🌐 Multi-Domain Evaluation (Non-Coding)
 
-コーディングの隠しpytestオラクルを、**採点器(grader)を差し替え可能**にすることで他能力へ横展開する。
-各 grader は「出力契約(プロンプト)」と「採点」を持ち、最終的に `(resolved, quality)` に正規化して返す。
-だから既存の pass@k / combined / usability / certify を**一切変更せず**再利用できる。設計の詳細は
-[📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md)。
+Extends evaluations beyond coding by replacing hidden pytest oracles with **pluggable graders**.
+Graders define output contracts (prompts) and scoring logic, normalizing results back into `(resolved, quality)` tuples. Consequently, pass@k, combined score, usability, and certification pipelines are reused **without code modifications**. Full design specs available in [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md).
 
-| ドメイン | grader | 台帳 / フラグ | 何を・どう測るか |
-|---|---|---|---|
-| 🛡️ security | `detection` | `tasks_sec.jsonl` / `--with-sec` `--only-sec` | ログ・コードに仕込んだ既知の脆弱性/侵害を**検出**し、gold ラベルと **precision/recall/F1** で採点。**クリーンなデコイ**を混ぜ、過検出(FP)を罰する |
-| 📋 general | `constraint` | `tasks_gen.jsonl` / `--with-gen` `--only-gen` | 文字数・JSON妥当性・正規表現などを**プログラム検証** (IFEval式)。全チェック通過で成功、通過率が quality。コーダー特化モデルの「一般退化」が出る |
-| ✍️ writing | `judge` | `tasks_write.jsonl` / `--with-write` `--only-write` | rubric + judgeモデルで 0–10 採点（**experimental**）。judgeが無い時は hard制約(文字数等)のみで決定的に判定 |
-| 🩺 medical | `qa` | `tasks_med.jsonl` / `--with-med` `--only-med` | 医療QAをアンサーキー照合 (MCQ=選択肢, 短答=キーワード)。gold に**日英両方の許容語**を入れており `--lang ja` の日本語モデルも正答扱い。**参考値** |
+| Domain      | Grader       | Ledger / Flag                                       | Scope & Evaluation Method                                                                                                                                                                                                            |
+| ----------- | ------------ | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 🛡️ security | `detection`  | `tasks_sec.jsonl` / `--with-sec` `--only-sec`       | **Detects** known vulnerabilities/breaches in logs or code, scoring against gold labels using **Precision / Recall / F1**. Features **clean decoy tasks** to penalize false positive (FP) over-detection.                            |
+| 📋 general  | `constraint` | `tasks_gen.jsonl` / `--with-gen` `--only-gen`       | Programmatically verifies character counts, JSON validity, regex patterns, etc. (**IFEval style**). Success achieved when all checks pass; pass rate represents quality. Exposes capability regression in specialized coding models. |
+| ✍️ writing  | `judge`      | `tasks_write.jsonl` / `--with-write` `--only-write` | 0–10 scoring via rubric + judge model (**experimental**). Evaluates deterministically using hard constraints (word count, etc.) when a judge model is unavailable.                                                                   |
+| 🩺 medical  | `qa`         | `tasks_med.jsonl` / `--with-med` `--only-med`       | Matches medical QA against answer keys (MCQ options, short answers). Gold keys include **both JP and EN allowed terms** so Japanese models running with `--lang ja` are correctly evaluated (**reference value**).                   |
 
-- **CLI**: `--with-*` で既定タスクに上乗せ、`--only-*` で当該ドメインだけ単体実行（`--with-l6/l7` と同体系）。`certify --merge` で分割結果を統合。
-- **certify 拡張**: ドメイン別ゲート判定に加え、coding＋非experimentalドメインの平均combinedの**調和平均＝バランス指数**を算出（あるドメインだけ低い一芸特化モデルを大きく減点）。医療は難易度別(basic/std/hard)の正答率も表示。
-- **自己検証**: `llmbench validate --only-sec|gen|write|med` で gold が全問成功・broken が全問失敗することを確認できる（LLM不要）。
-- **judge を有効化**する場合は `config.yaml` の `quality.judge.enabled: true` と `judge_model` を設定（self-preference 回避のため候補モデルと別系統を推奨）。
+- **CLI Architecture**: Appends ledgers via `--with-*`; runs standalone domain evaluations via `--only-*` (shares the same flag structure as `--with-l6/l7`). Split execution outputs merge via `certify --merge`.
+- **Certification Extensions**: In addition to domain-specific gates, evaluates the **Balance Index** (harmonic mean of average combined scores across coding + non-experimental domains) to penalize single-capability spikes. Displays medical accuracy broken down by difficulty (basic/std/hard).
+- **Self-Validation**: Execute `llmbench validate --only-sec|gen|write|med` to verify all gold files pass and broken files fail (zero LLM calls required).
+- **Judge Setup**: Set `quality.judge.enabled: true` and configure `judge_model` in `config.yaml` to enable writing evaluations (using a model distinct from candidate models is recommended to avoid self-preference bias).
 
 > [!NOTE]
-> writing/medical のゲート閾値は暫定（未較正）で、`certify_domains` / `DEFAULT_MED_GATES` で調整可能。
-> 医療は臨床的妥当性の保証ではなく、5択MCQのチャンス正答率(約20%)を踏まえた**参考値**として扱う。
+> Gate thresholds for writing/medical domains are provisional (uncalibrated) and configurable via `certify_domains` / `DEFAULT_MED_GATES`.
+> Medical evaluations serve as **reference metrics** accounting for 5-choice MCQ baseline chance accuracy (~20%) rather than clinical validity guarantees.
 
-## ⚙️ 設定
+## ⚙️ Configuration
 
-`config.yaml` で一元管理:
+Managed centrally in `config.yaml`:
 
 ```yaml
 models:
-  local-openai:            # llama.cpp / LM Studio / vLLM
-    type: openai
-    base_url: "http://localhost:8080/v1"
-    model: "auto"          # auto = /v1/models のロード中モデルを自動採用 (config編集不要)
-    # auto_prefer: "qwen"  # 複数モデルロード時に部分一致で選択
-  local-ollama:
-    type: ollama
-    base_url: "http://localhost:11434"
-    model: "qwen2.5-coder:32b"
-  ref-gpt:                 # compareのアンカー用 (API)
-    type: openai
-    base_url: "https://api.openai.com/v1"
-    model: "gpt-4o"
-    api_key: "${OPENAI_API_KEY}"   # ${VAR} は環境変数から展開
+    local-openai: # llama.cpp / LM Studio / vLLM
+        type: openai
+        base_url: "http://localhost:8080/v1"
+        model: "auto" # auto = automatically adopts active model from /v1/models (no config edit required)
+        # auto_prefer: "qwen"  # Substring matching when multiple models are loaded
+    local-ollama:
+        type: ollama
+        base_url: "http://localhost:11434"
+        model: "qwen2.5-coder:32b"
+    ref-gpt: # Reference anchor model for comparison (API)
+        type: openai
+        base_url: "https://api.openai.com/v1"
+        model: "gpt-4o"
+        api_key: "${OPENAI_API_KEY}" # ${VAR} expands environment variables
 
 run:
-  issue_lang: en           # ja に切替で language tax 検証
-  test_timeout: 120
-  runs: 1                  # 各タスクの試行回数 (>1 で pass@k・成功率)
-  sample_temp: 0.8         # 複数試行時のサンプリング温度
-  # ollama_host: "http://localhost:11434"   # Ollama接続先 (未定義モデルの自動解決)
+    issue_lang: en # Switch to ja to measure language tax
+    test_timeout: 120
+    runs: 1 # Trial count per task (>1 calculates pass@k & success rate)
+    sample_temp: 0.8 # Sampling temperature for multi-trial runs
+    # ollama_host: "http://localhost:11434"   # Connection host for Ollama model auto-resolution
 
 quality:
-  llm_review:
-    enabled: false         # レビュー用モデル稼働時に true
-    reviewer_model: local-openai
-  judge:                   # writing(judge grader) の採点モデル
-    enabled: false         # 別系統の judge 起動時に true (候補モデルと別系統推奨)
-    judge_model: local-openai
-    seeds: 1               # 1問を何回採点して平均するか (>1 で judge一致率を計測)
+    llm_review:
+        enabled: false # Set to true when reviewer model is active
+        reviewer_model: local-openai
+    judge: # Scoring model for writing (judge grader)
+        enabled: false # Set to true when separate judge is active (distinct judge model recommended)
+        judge_model: local-openai
+        seeds: 1 # Number of evaluation runs to average per prompt (>1 calculates consistency)
 
-usability:                 # success_rate × quality でティア分類
-  autonomous: {min_success: 0.9, min_quality: 80}
-  assisted:   {min_success: 0.6, min_quality: 0}
+usability: # Tier classification rules based on success_rate × quality
+    autonomous: { min_success: 0.9, min_quality: 80 }
+    assisted: { min_success: 0.6, min_quality: 0 }
 
-graders:                   # コーディング以外の採点しきい値
-  detection: {pass_f1: 0.67}
-  constraint: {pass_ratio: 1.0}
-  judge: {pass_score: 7.0}
+graders: # Thresholds for non-coding graders
+    detection: { pass_f1: 0.67 }
+    constraint: { pass_ratio: 1.0 }
+    judge: { pass_score: 7.0 }
 
-certify_domains:           # ドメイン別「使えるライン」ゲート (暫定)
-  security: {min_success: 0.6, min_combined: 60}
-  general:  {min_success: 0.7, min_combined: 65}
-  writing:  {min_success: 0.5, min_combined: 55, experimental: true}
-  medical:  {min_success: 0.6, min_combined: 60, reference: true}
+certify_domains: # Domain certification gates (provisional)
+    security: { min_success: 0.6, min_combined: 60 }
+    general: { min_success: 0.7, min_combined: 65 }
+    writing: { min_success: 0.5, min_combined: 55, experimental: true }
+    medical: { min_success: 0.6, min_combined: 60, reference: true }
 ```
 
 > [!TIP]
-> **モデル名を毎回書き換える必要はありません。** `model: "auto"` にしておけば、llama.cpp等で
-> ggufを差し替えるだけで、llmbench が `/v1/models` から実モデル名を取得し、レポート/ファイル名も
-> その実名でラベルします。Ollamaは `--model <インストール済み名>` を直接指定できます
-> (`llmbench models` で一覧)。固定したい時は `--label <名前>`。
+> **No need to edit model names manually every run.** When `model: "auto"` is set, swapping GGUF models in servers like llama.cpp automatically updates model labels in `llmbench` reports and output filenames via `/v1/models`. For Ollama, pass installed model names directly via `--model <installed_name>` (inspect via `llmbench models`). Override or fix output labels using `--label <name>`.
 
-### 🔌 接続先の指定 (config編集なしで切替)
+### 🔌 Connection Targets (Switch Connection Endpoints Without Config Edits)
 
-`--base-url` / `--client-type` で接続先をCLIから直接指定できます:
+Pass `--base-url` / `--client-type` directly via CLI:
 
 ```bash
-# llama.cpp / vLLM / LM Studio に直結 (config不要)
+# Direct connection to llama.cpp / vLLM / LM Studio (no config edit required)
 llmbench run --model auto --client-type openai --base-url http://localhost:8085/v1
 
-# CodeRouter (multiagent) に直結
+# Direct connection to CodeRouter (multiagent)
 llmbench run --model router --client-type multiagent --base-url http://localhost:8088
 
-# リモートOllama (稼働モデル名をそのまま指定)
-llmbench run --model qwen2.5-coder:32b --base-url http://192.168.1.10:11434
+# Connect to remote Ollama instance using installed model name
+llmbench run --model qwen2.5-coder:32b --base-url [http://192.168.1.10:11434](http://192.168.1.10:11434)
+
 ```
 
-接続先の優先順位:
+Target Resolution Priority:
 
-| 対象 | 優先順 (左が強い) |
-|---|---|
-| base_url | `--base-url` > config `base_url` (`${VAR}` 展開可) > 環境変数 (`OPENAI_BASE_URL` / `OLLAMA_HOST` / `CODEROUTER_BASE_URL`) > 型別デフォルト |
-| モデル名 | `--client-type` 直接指定 > config `models:` キー > Ollama稼働モデル自動解決 |
-| Ollamaホスト | `--ollama-host` > env `OLLAMA_HOST` > config ollamaモデルの `base_url` > `http://localhost:11434` |
+| Parameter   | Resolution Priority (Leftmost takes precedence)                                                                                                                  |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| base_url    | `--base-url` > config `base_url` (`${VAR}` supported) > Environment variables (`OPENAI_BASE_URL` / `OLLAMA_HOST` / `CODEROUTER_BASE_URL`) > Client-type defaults |
+| Model Name  | `--client-type` direct parameter > `models:` key in config > Automatic Ollama active model resolution                                                            |
+| Ollama Host | `--ollama-host` > `OLLAMA_HOST` env > Ollama model `base_url` in config > `http://localhost:11434`                                                               |
 
 > [!NOTE]
-> `${VAR}` 参照の環境変数が未設定の場合は明確なエラーになります(空文字での分かりにくい401を防止)。
+> Unset `${VAR}` environment variable references raise explicit errors (preventing cryptic 401 authentication failures caused by silent empty string evaluation).
 
-## 📁 プロジェクト構成
+## 📁 Project Structure
 
 ```
 swe-bench/
 ├── llmbench/
-│   ├── clients/        # 🔌 LLM接続 (openai_compat / ollama / mock)。model:auto・Ollama一覧
-│   ├── graders/        # 🌐 採点器: code / detection / constraint / judge / qa + checks(IFEval)
-│   ├── patch.py        # 📝 LLM出力パース (FILE:マーカー + コードブロック)
-│   ├── sandbox.py      # 📦 一時コピー + pytest隔離実行
-│   ├── functional.py   # ✅ resolved判定 (code grader が使用)
-│   ├── quality/        # 🧹 ruff / complexity / llm_review / sonar
-│   ├── scoring.py      # ⚖️ 複合スコア + pass@k 推定量
-│   ├── usability.py    # 🧭 自律/補助/不可 ティア分類
-│   ├── certify.py      # 🎓 tier認証 + ドメイン別ゲート + バランス指数 + 医療readout
-│   ├── runner.py       # 🎛️ オーケストレータ (grader差し替え・多試行集計)
-│   ├── compare.py      # 🆚 複数結果の横断比較レポート
-│   └── report.py       # 📊 Markdownレポート (ドメイン別サマリ込み)
-├── tasks/              # 🧩 既定40問 (L1 easy5 / L2 medium5 / L3 hard10 / L4 expert12 / L5 frontier8)
-│                       #    + tasks_l6.jsonl (L6 architect 20問, --with-l6)
-│                       #    + tasks_l7.jsonl (L7 grandmaster 40問, --with-l7)
-│                       #    + tasks_sec/gen/write/med.jsonl (ドメイン, --with-sec/gen/write/med)
-├── DESIGN_DOMAINS.md   # 📐 マルチドメイン拡張の設計仕様
+│   ├── clients/        # 🔌 LLM Client Connectors (openai_compat / ollama / mock). Model auto-detection & Ollama listing
+│   ├── graders/        # 🌐 Evaluators: code / detection / constraint / judge / qa + checks (IFEval)
+│   ├── patch.py        # 📝 LLM Output Parsing (FILE: markers + code blocks)
+│   ├── sandbox.py      # 📦 Workspace Isolation & Pytest Execution Sandbox
+│   ├── functional.py   # ✅ Functional Resolution Check (used by code grader)
+│   ├── quality/        # 🧹 Code Quality Analyzers: ruff / complexity / llm_review / sonar
+│   ├── scoring.py      # ⚖️ Composite Score Calculation & pass@k Unbiased Estimators
+│   ├── usability.py    # 🧭 Autonomous / Assisted / Unusable Tier Classification
+│   ├── certify.py      # 🎓 Tier Certification + Domain Gates + Balance Index + Medical Detail Readout
+│   ├── runner.py       # 🎛️ Orchestrator Engine (Pluggable Grader Support & Multi-Run Aggregation)
+│   ├── compare.py      # 🆚 Multi-Model Cross-Comparison Report Generator
+│   └── report.py       # 📊 Markdown Report Renderer (including domain summary sections)
+├── tasks/              # 🧩 40 Built-in Tasks (L1 easy 5 / L2 medium 5 / L3 hard 10 / L4 expert 12 / L5 frontier 8)
+│                       #    + tasks_l6.jsonl (L6 architect 20 tasks, --with-l6)
+│                       #    + tasks_l7.jsonl (L7 grandmaster 40 tasks, --with-l7)
+│                       #    + tasks_sec/gen/write/med.jsonl (Domain ledgers, --with-sec/gen/write/med)
+├── DESIGN_DOMAINS.md   # 📐 Multi-Domain Extension Architecture Specifications
 └── config.yaml
+
 ```
 
 > [!NOTE]
-> patch形式は「ファイル全体置換」(`--- FILE: path ---` + コードブロック) を採用。
-> ローカルLLMはunified diffの行番号精度が低いため、この方式の方がパース成功率が高い。
+> Patch format uses whole-file replacement (`--- FILE: path ---` + code block).
+> Because local LLMs struggle with line-number precision required by unified diffs, whole-file replacements yield significantly higher parsing success rates.
 
-## 🧩 タスクの追加
+## 🧩 Adding Tasks
 
-**コーディングタスク** (code grader):
+**Coding Tasks** (`code` grader):
 
 ```
 tasks/tXXX_name/
-├── issue.md        # 英語バグレポート
-├── issue_ja.md     # 日本語バグレポート
-├── buggy_code/     # バグ入りソース (LLMに渡される)
-├── gold/           # 正解ファイル (変更が必要なファイルのみ)
-└── tests/          # 隠しテスト (LLMには渡されない)
+├── issue.md        # English bug report
+├── issue_ja.md     # Japanese bug report
+├── buggy_code/     # Buggy source files (provided to LLM)
+├── gold/           # Correct reference files (only modified files)
+└── tests/          # Hidden test suite (withheld from LLM)
+
 ```
 
-1. 上記レイアウトでディレクトリを作成
-2. `tasks/tasks.jsonl` に1行追加 (難易度は easy/medium/hard/expert/frontier/architect/grandmaster):
-   ```json
-   {"task_id": "t0XX", "dir": "t0XX_name", "difficulty": "expert", "title": "..."}
-   ```
-   性能制約タスクは `"perf_timeout": <秒>` を足すとそのタスクだけ個別タイムアウトになる。
-   回帰罠は `tests/` に複数テストを置く (例: `test_core.py` で既存挙動をロック、
-   `test_bug.py` でバグを捕捉)。L6(architect)は既定では読まれない別台帳
-   `tasks/tasks_l6.jsonl`、L7(grandmaster)は `tasks/tasks_l7.jsonl` に置き、
-   それぞれ `--with-l6` / `--with-l7` 指定時のみマージされる (`--l6-ledger` / `--l7-ledger` で台帳の差し替えも可)。
-3. 検証: `llmbench validate --tasks t0XX` (gold がpass / broken がfail すればOK)。
-   L6 タスクは `llmbench validate --with-l6 --tasks t0XX`、L7 タスクは
-   `llmbench validate --with-l7 --tasks t0XX` で検証する。
+1. Create directory using the structure above.
+2. Add a single-line JSON record to `tasks/tasks.jsonl` (difficulty levels: easy / medium / hard / expert / frontier / architect / grandmaster):
 
-**ドメインタスク** (detection / constraint / judge / qa) は `buggy_code`・`tests` を持たず、
-台帳レコードに `grader` と `domain` を指定する。gold の形は grader ごとに異なる
-(detection=`gold.json`のラベル / constraint=`checks.json`＋`gold_answer.md` / judge=`rubric.json`＋`gold_answer.md` /
-qa=`gold.json`のキー)。スキーマと採点規約は [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) を参照。
+```json
+{ "task_id": "t0XX", "dir": "t0XX_name", "difficulty": "expert", "title": "..." }
+```
+
+For performance-constrained tasks, add `"perf_timeout": <seconds>` to apply custom execution timeouts.
+For regression traps, place multiple test files inside `tests/` (e.g., `test_core.py` locks existing behavior, `test_bug.py` catches target bug). L6 (architect) tasks belong in `tasks/tasks_l6.jsonl` and L7 (grandmaster) tasks belong in `tasks/tasks_l7.jsonl`, merged only when passing `--with-l6` or `--with-l7` (ledgers can be overridden via `--l6-ledger` / `--l7-ledger`). 3. Verify task: Run `llmbench validate --tasks t0XX` (passes when gold passes and buggy code fails).
+Validate L6 tasks via `llmbench validate --with-l6 --tasks t0XX` and L7 tasks via `llmbench validate --with-l7 --tasks t0XX`.
+
+**Domain Tasks** (`detection` / `constraint` / `judge` / `qa`) omit `buggy_code` and `tests` directories.
+Task ledger records specify `grader` and `domain`. Schema layouts vary per grader (detection = `gold.json` labels; constraint = `checks.json` + `gold_answer.md`; judge = `rubric.json` + `gold_answer.md`; QA = `gold.json` keys). Refer to [📐 DESIGN_DOMAINS.md](DESIGN_DOMAINS.md) for full specifications.
 
 ```json
 {"task_id":"s01","dir":"s01_name","grader":"detection","domain":"security","difficulty":"sec_medium","title":"..."}
 {"task_id":"g01","dir":"g01_name","grader":"constraint","domain":"general","difficulty":"gen_easy","title":"..."}
 {"task_id":"m01","dir":"m01_name","grader":"qa","domain":"medical","difficulty":"med_std","title":"..."}
+
 ```
 
-検証は `llmbench validate --only-sec|gen|write|med` (対象台帳のみ)。
+Verify domain tasks via `llmbench validate --only-sec|gen|write|med`.
 
-## 🗺️ ロードマップ
+## 🗺️ Roadmap
 
-- [x] 機能 + 品質の複合評価パイプライン
-- [x] OpenAI互換 / Ollama 両対応
-- [x] 日英issueによる language tax 計測
-- [x] 🎲 信頼性 (pass@k / 成功率) 計測
-- [x] 🧭 usability ティア判定
-- [x] 🆚 複数モデル横断比較レポート (`compare`)
-- [x] 🔎 `model: auto` / Ollama動的モデル選択
-- [x] 🧩 難問tier (L4 expert / L5 frontier) で天井効果を打破 — 計40問
-- [x] 🏛️ L6 architect tier (t041–t060, 20問) を任意オプション `--with-l6` で追加 — 上位帯の分離
-- [x] 🏆 L7 grandmaster tier (t061–t100, 40問) を任意オプション `--with-l7` で追加 — 天井評価帯 (実モデル較正は未了、gate 暫定 succ≥0.35 / comb≥55)
-- [x] 🎓 tier合格制「使えるライン」認証 (`certify`, L1–L7)
-- [x] ⏱️ タスク別 perf_timeout (性能制約タスク)
-- [x] 🔀 分割実行 (`--only-l6`/`--only-l7`) と `certify --merge` による統合認証
-- [x] 🌐 マルチドメイン評価 (pluggable grader: security/general/writing/medical) + ドメイン別certify・バランス指数
-- [x] 🩺 医療QA 24問 (日英対応・独立ファクトチェック済) — 参考値
-- [ ] 🎯 実モデル較正による tier / ドメインゲート閾値の確定 (32b dense / 3b級を追加・L7・judge・医療 gate 確定)
-- [ ] ✍️ judge の多系統化と judge一致率の本採用 (writing の較正)
-- [ ] 🐳 Docker隔離実行
-- [ ] 📥 SWE-bench Lite 公式タスクの取込
-- [ ] 🔄 GitHub repoからのタスク自動抽出
-- [ ] 📈 nvidia-smiによるVRAM自動計測
+- [x] Composite evaluation pipeline combining functional correctness + code quality
+- [x] Dual OpenAI-compatible / Ollama client connectivity
+- [x] Dual EN/JA bug reports for measuring language tax
+- [x] 🎲 Reliability (pass@k / success rate) evaluation
+- [x] 🧭 Usability tier classification
+- [x] 🆚 Cross-model comparison report generation (`compare`)
+- [x] 🔎 `model: auto` / Dynamic Ollama active model resolution
+- [x] 🧩 High-difficulty tiers (L4 expert / L5 frontier) breaking score ceiling effects (40 tasks total)
+- [x] 🏛️ L6 architect tier (t041–t060, 20 tasks) added as optional `--with-l6` flag for top-tier model separation
+- [x] 🏆 L7 grandmaster tier (t061–t100, 40 tasks) added as optional `--with-l7` flag for ceiling evaluation (provisional gates: success ≥ 0.35 / combined ≥ 55)
+- [x] 🎓 Usability line tier-based certification system (`certify`, L1–L7)
+- [x] ⏱️ Per-task `perf_timeout` support for performance-constrained tasks
+- [x] 🔀 Split execution (`--only-l6`/`--only-l7`) and unified certification consolidation via `certify --merge`
+- [x] 🌐 Multi-domain evaluation engine (pluggable graders: security/general/writing/medical) + domain-specific certification & Balance Index
+- [x] 🩺 24 Medical QA tasks (dual-language JP/EN support, independently fact-checked) — reference values
+- [ ] 🎯 Empirical model calibrations to finalize tier/domain gates (adding 32b dense & 3b models; finalizing L7, judge, and medical gates)
+- [ ] ✍️ Multi-engine judge consensus & agreement metric adoption for writing evaluations
+- [ ] 🐳 Isolated Docker container execution sandbox
+- [ ] 📥 Integration of official SWE-bench Lite tasks
+- [ ] 🔄 Automated task extraction directly from GitHub repositories
+- [ ] 📈 Automated VRAM tracking via `nvidia-smi`
 
 ## 🤝 Contributing
 
-タスク追加・品質レイヤー追加・ドメイン追加のPR歓迎です。`llmbench validate` (およびドメインは
-`--only-*`) がPASSすることを確認の上、Conventional Commits形式 (`feat:` / `fix:`) でお願いします。
+Pull requests adding tasks, code quality evaluators, or new evaluation domains are welcome! Please ensure `llmbench validate` (and domain-specific validations via `--only-*`) pass before submitting PRs using Conventional Commits (`feat:`, `fix:`).
 
 ## 📜 License
 

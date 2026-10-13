@@ -1,4 +1,4 @@
-"""LLMクライアント抽象基底."""
+"""LLM client abstract base."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from dataclasses import dataclass, field
 
 
 def expand_env(value, where: str = ""):
-    """config値の ${VAR} / $VAR を環境変数から展開する.
+    """Expands ${VAR} / $VAR in config values from environment variables.
 
-    未設定の環境変数を参照した場合は ValueError (無警告で空文字に
-    なって分かりにくい401等を起こさないため)。
-    プレースホルダでない値はそのまま返す。
+    Raises ValueError if referencing an unset variable (prevents confusing 401s
+    caused by silent substitution with empty strings).
+    Returns value directly if not a placeholder string.
     """
     if not isinstance(value, str):
         return value
@@ -27,23 +27,23 @@ def expand_env(value, where: str = ""):
     if not v:
         hint = f" ({where})" if where else ""
         raise ValueError(
-            f"環境変数 {var} が未設定です{hint}。"
-            f"export {var}=... してから再実行してください"
+            f"Environment variable {var} is not set{hint}. "
+            f"Please run `export {var}=...` and try again."
         )
     return v
 
 
 def require_cfg(cfg: dict, key: str, name: str, hint: str = ""):
-    """必須configキーの取得。欠落時はKeyErrorでなく分かりやすいValueError."""
+    """Retrieves required config keys with clear ValueError on omission instead of KeyError."""
     if key not in cfg or cfg[key] in (None, ""):
         extra = f" {hint}" if hint else ""
-        raise ValueError(f"models.{name} に {key} がありません。{extra}".rstrip())
+        raise ValueError(f"Missing {key} in models.{name}.{extra}".rstrip())
     return cfg[key]
 
 
 @dataclass
 class GenerationResult:
-    """1回の生成結果. 速度メトリクス込み."""
+    """Single generation result including speed metrics."""
 
     text: str
     latency_sec: float = 0.0
@@ -59,7 +59,7 @@ class GenerationResult:
 
 
 class LLMClient(ABC):
-    """OpenAI互換 / Ollama / Mock 共通インタフェース."""
+    """Common interface for OpenAI-compatible / Ollama / Mock clients."""
 
     def __init__(self, name: str, cfg: dict):
         self.name = name
@@ -70,10 +70,10 @@ class LLMClient(ABC):
 
     @abstractmethod
     def _generate(self, system: str, user: str) -> GenerationResult:
-        """system/userプロンプトから生成する. 実装はサブクラスで."""
+        """Generates output from system/user prompts. Implemented by subclasses."""
 
     def generate(self, system: str, user: str) -> GenerationResult:
-        """生成 + レイテンシ計測のラッパ."""
+        """Wrapper for generation + latency measurement."""
         t0 = time.monotonic()
         result = self._generate(system, user)
         if result.latency_sec == 0.0:

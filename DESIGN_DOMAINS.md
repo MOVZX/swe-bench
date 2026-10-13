@@ -1,244 +1,237 @@
-# 🧭 マルチドメイン拡張 仕様書 (DESIGN_DOMAINS.md)
+# 🧭 Multi-Domain Extension Specification (DESIGN_DOMAINS.md)
 
-**版**: draft-1 / **対象**: llmbench に「コーディング以外の能力」を測る採点軸を追加する
-**関連**: README.md（既存アーキテクチャ） / TASKS.md（タスク設計） / certify.py（tier認証）
+**Version**: draft-1 / **Scope**: Adding evaluation axes to measure "non-coding capabilities" in llmbench
+**Related**: README.md (Existing Architecture) / TASKS.md (Task Design) / certify.py (Tier Certification)
 
 ---
 
-## 1. 背景と目的
+## 1. Background and Purpose
 
-現行 llmbench は「隠しpytest → resolved(0/1)」という**客観オラクル**を入口に、その下流へ
-pass@k・combined・usability・certify を積み上げている。この設計はコーディングにしか使えない。
-一方でローカルLLMの実運用では、コード修正以外の能力が任せられるかを知りたい:
+The current llmbench uses an **objective oracle** ("hidden pytest → resolved (0/1)") as its foundation, building pass@k, combined score, usability, and tier certification downstream. This design only works for coding tasks.
+However, in practical deployment of local LLMs, users need to know whether non-coding capabilities can be safely delegated:
 
-- **セキュリティ/解析** — ログやコードから既知の侵害・脆弱性を**検出・診断**できるか
-- **一般タスク/指示追従** — 要約・抽出・整形・制約遵守。コーダー特化モデルの「一般退化」を測る
-- **創作/文章生成** — リリースノート・説明文などの文章品質（最も客観化が難しい）
+- **Security / Analysis** — Can the model **detect and diagnose** known breaches and vulnerabilities from logs or code?
+- **General Tasks / Instruction Following** — Summarization, extraction, formatting, constraint adherence. Measures "general capability regression" in coder-specialized models.
+- **Writing / Content Generation** — Text quality for release notes, documentation, etc. (the most difficult to objectively evaluate).
 
-本拡張のゴールは、これらを**既存エンジンを壊さずに**測れるようにすること。
+The goal of this extension is to enable evaluation of these capabilities **without breaking the existing engine**.
 
-## 2. 設計原則 — pluggable grader
+## 2. Design Principles — Pluggable Grader
 
-**核心**: 採点器 (grader) を差し替え可能にし、各採点器が最終的に
-`(resolved: bool, quality: 0–100)` という**同じインターフェイスに正規化**して返す。
-こうすれば `_aggregate_attempts` / `combined_score` / pass@k / usability / certify は
-**一切変更不要**で再利用できる。`--with-l6/l7` が難易度の縦展開だったのに対し、本拡張は
-**オラクルの横展開**である。
+**Core Concept**: Make graders pluggable so that each grader normalizes and returns results into the **same interface**: `(resolved: bool, quality: 0–100)`.
+By doing so, `_aggregate_attempts`, `combined_score`, pass@k, usability, and certification pipelines can be reused **without any modifications**. While `--with-l6/l7` represented vertical scaling in difficulty, this extension represents **horizontal scaling of oracles**.
 
 ```
 generate ─▶ grader.evaluate(task, output) ─▶ (resolved, quality, components, detail)
                                                 │
-                        既存の集計/信頼性/認証パイプライン（無改修）
+                        Existing Aggregation / Reliability / Certification Pipeline (Unmodified)
+
 ```
 
-grader は「出力契約（プロンプト）」と「採点」の両方を所有する:
+A grader owns both the "output contract (prompt)" and "scoring logic":
 
 ```python
 class Grader:
     name: str
     domain: str                                   # "code" | "security" | "general" | "writing"
-    def build_prompt(task, lang) -> (system, user)   # 出力フォーマットの指示
+    def build_prompt(task, lang) -> (system, user)   # Instructions for output format
     def evaluate(task, raw_output, ctx) -> GraderEval
-    def mock_gold(task) -> str                     # validate用: 正解相当の出力
-    def mock_broken(task) -> str                   # validate用: 失敗すべき出力
+    def mock_gold(task) -> str                     # For validate: output equivalent to correct answer
+    def mock_broken(task) -> str                   # For validate: output expected to fail
+
 ```
 
-`GraderEval`（`Attempt` に写像される正規化結果）:
+`GraderEval` (Normalized evaluation result mapped to `Attempt`):
 
-| フィールド | 型 | 意味 |
-|---|---|---|
-| `resolved` | bool | この試行が「成功」か（成功率・pass@k の素） |
-| `quality_score` | float 0–100 | 採点品質（combined のスケーラ） |
-| `parse_ok` / `parse_error` | bool / str | 出力パースの成否 |
-| `parsed_files` | dict | artifacts 保存物（予測ラベル・回答など） |
-| `fail_reason` | str | 失敗理由 |
-| `components` | dict | 採点内訳（レポート表示。P/R/F1・チェック通過数など） |
-| `detail_output` | str | 採点詳細テキスト（既存 `test_output` に相当） |
+| Field                      | Type        | Description                                                              |
+| -------------------------- | ----------- | ------------------------------------------------------------------------ |
+| `resolved`                 | bool        | Whether this trial succeeded (basis for success rate and pass@k)         |
+| `quality_score`            | float 0–100 | Quality score (scaler for combined score)                                |
+| `parse_ok` / `parse_error` | bool / str  | Whether output parsing succeeded / error message                         |
+| `parsed_files`             | dict        | Artifacts saved (predicted labels, answers, etc.)                        |
+| `fail_reason`              | str         | Reason for failure                                                       |
+| `components`               | dict        | Scoring breakdown for report display (P/R/F1, passed checks count, etc.) |
+| `detail_output`            | str         | Detailed scoring output text (equivalent to existing `test_output`)      |
 
-## 3. 採点器仕様
+## 3. Grader Specifications
 
-### 3.1 code（既存・ラップ）
+### 3.1 code (Existing / Wrapped)
 
-現行の `parse_llm_output → evaluate_functional → evaluate_quality → combined_score` を
-そのまま `CodeGrader` として包む。挙動・スコア・validate 結果は現状と完全一致（後方互換）。
+Wraps the existing `parse_llm_output → evaluate_functional → evaluate_quality → combined_score` pipeline directly into `CodeGrader`. Behavior, scores, and validation results remain identical to current behavior (backward compatible).
 
-### 3.2 detection（セキュリティ/解析）
+### 3.2 detection (Security / Analysis)
 
-**測るもの**: 検出・診断能力（修正ではなく「危険を正しく指摘できるか」）。
+**Evaluates**: Detection and diagnostic capabilities (identifying risks correctly rather than applying code fixes).
 
-**出力契約**: モデルは `--- FINDINGS ---` の後に JSON 配列を出す。
-各要素は `{"type": "...", "location": "...", "evidence": "..."}`。
+**Output Contract**: The model outputs a JSON array following `--- FINDINGS ---`.
+Each element follows `{"type": "...", "location": "...", "evidence": "..."}`.
 
 ```
 --- FINDINGS ---
 [
   {"type": "CWE-22 Path Traversal", "location": "line 42", "evidence": "open(os.path.join(base, user_path))"}
 ]
+
 ```
 
 **gold.json**:
 
 ```json
 {
-  "findings": [
-    {"id": "path_traversal", "cwe": "CWE-22",
-     "any_of": ["os.path.join", "user_path", "../"],
-     "keywords_all": ["travers"], "min_hits": 1}
-  ]
+    "findings": [
+        {
+            "id": "path_traversal",
+            "cwe": "CWE-22",
+            "any_of": ["os.path.join", "user_path", "../"],
+            "keywords_all": ["travers"],
+            "min_hits": 1
+        }
+    ]
 }
 ```
 
-- 予測 `p` が gold `g` を**カバー**: `p` の直列化テキスト（type+location+evidence を小文字化）が
-  `g.any_of`（+ `g.cwe`）の**いずれか**を含み、かつ `g.keywords_all` を**すべて**含む。
-- 予測 `p` が **真陽性(TP)**: いずれかの gold をカバー。そうでなければ **偽陽性(FP)**。
-- `recall = カバーされたgold数 / gold総数`、`precision = TP予測数 / 予測総数`、`F1 = 2PR/(P+R)`。
-- **デコイ（gold.findings == []）**: `recall=1`。予測0件→`precision=1`→F1=1（合格）、
-  予測≥1件→`precision=0`→F1=0（過検出を罰する）。**過検出モデルはここで落ちる**のが要点。
-- `resolved = F1 ≥ pass_f1`（既定 0.67, config `graders.detection.pass_f1`）。`quality = round(F1×100)`。
+- Prediction `p` **covers** gold `g`: Serialized text of `p` (lowercased type + location + evidence) contains **at least one** of `g.any_of` (or `g.cwe`) and **all** of `g.keywords_all`.
+- Prediction `p` is a **True Positive (TP)** if it covers any gold finding; otherwise, it is a **False Positive (FP)**.
+- `recall = covered gold count / total gold count`, `precision = TP predictions / total predictions`, `F1 = 2PR / (P + R)`.
+- **Decoys (`gold.findings == []`)**: Defined as `recall = 1`. 0 predictions → `precision = 1` → F1 = 1 (PASS); ≥1 predictions → `precision = 0` → F1 = 0 (penalizes over-detection). Crucially, **models prone to false alarms fail here**.
+- `resolved = F1 ≥ pass_f1` (default: 0.67, configurable via `graders.detection.pass_f1`). `quality = round(F1 × 100)`.
 
-**validate**: `mock_gold` は gold.findings から FINDINGS を構築（デコイは `[]`）。
-`mock_broken` は**架空の finding を1件**出す → デコイでは FP、非デコイでは recall0 で、
-いずれも F1=0 → 失敗（broken 不変条件を満たす）。
+**Validation**: `mock_gold` constructs FINDINGS from `gold.findings` (`[]` for decoys).
+`mock_broken` outputs **a single fake finding** → results in FP for decoys, recall = 0 for non-decoys, yielding F1 = 0 → fails in both cases (satisfies broken invariant).
 
-### 3.3 constraint（一般タスク/指示追従・IFEval方式）
+### 3.3 constraint (General Tasks / Instruction Following · IFEval Style)
 
-**測るもの**: 指示・制約の遵守。完全客観（judge 不要）。コーダー特化モデルの一般退化が可視化される。
+**Evaluates**: Strict adherence to instructions and constraints. Completely objective (no LLM judge required). Visualizes capability regression in coder-specialized models.
 
-**出力契約**: モデルは `--- ANSWER ---` の後に回答本文を出す（無ければ全文を回答とみなす）。
+**Output Contract**: The model outputs answer text after `--- ANSWER ---` (or treats the entire response as the answer if the delimiter is absent).
 
-**checks.json**（プログラム検証可能なチェック配列）:
+**checks.json** (Array of programmatically verifiable checks):
 
-```json
+````json
 [
-  {"kind": "word_count", "min": 50, "max": 120},
-  {"kind": "json_valid"},
-  {"kind": "json_path", "path": "status", "equals": "ok"},
-  {"kind": "regex", "pattern": "^- ", "flags": "m", "desc": "箇条書き"},
-  {"kind": "contains", "text": "TODO", "ci": true},
-  {"kind": "not_contains", "text": "```"},
-  {"kind": "line_count", "max": 5}
+    { "kind": "word_count", "min": 50, "max": 120 },
+    { "kind": "json_valid" },
+    { "kind": "json_path", "path": "status", "equals": "ok" },
+    { "kind": "regex", "pattern": "^- ", "flags": "m", "desc": "bullet points" },
+    { "kind": "contains", "text": "TODO", "ci": true },
+    { "kind": "not_contains", "text": "```" },
+    { "kind": "line_count", "max": 5 }
 ]
-```
+````
 
-対応 kind: `word_count` / `line_count` / `char_count`(min/max) / `contains` / `not_contains` /
-`starts_with` / `ends_with` / `equals` / `regex`(negate可) / `json_valid` / `json_path`(equals)。
+Supported kinds: `word_count` / `line_count` / `char_count` (min/max), `contains`, `not_contains`, `starts_with`, `ends_with`, `equals`, `regex` (supports negation), `json_valid`, `json_path` (`equals`).
 
-- `resolved = 全チェック通過`（instruction-strict accuracy）。
-- `quality = 通過数 / 総数 × 100`（instruction-level accuracy）。IFEval の 2 指標に対応。
-- **validate**: `mock_gold` は `gold_answer.md` を返す（全チェック通過するよう作成）。
-  `mock_broken` は制約を破るテキスト → 失敗。
+- `resolved = all checks pass` (instruction-strict accuracy).
+- `quality = passed checks / total checks × 100` (instruction-level accuracy). Corresponds to IFEval's two core metrics.
+- **Validation**: `mock_gold` returns `gold_answer.md` (crafted to pass all checks).
+  `mock_broken` returns text that violates constraints → fails.
 
-### 3.4 judge（創作/文章生成・実験的）
+### 3.4 judge (Writing / Content Generation · Experimental)
 
-**測るもの**: 文章品質。**オラクルが無く rubric + judge 依存**のため **experimental 扱い**
-（L7 と同じく未較正）。
+**Evaluates**: Writing quality. **Lacks objective oracle and relies on rubric + judge**, treated as **experimental** (uncalibrated, similar to L7).
 
-**出力契約**: `--- ANSWER ---` の後に文章本文。
+**Output Contract**: Text body output following `--- ANSWER ---`.
 
 **rubric.json**:
 
 ```json
 {
-  "hard_constraints": [{"kind": "word_count", "min": 80, "max": 200}],
-  "criteria": [
-    {"name": "明確さ", "weight": 1.0, "desc": "主旨が一読で伝わる"},
-    {"name": "網羅性", "weight": 1.0, "desc": "指定要素を漏れなく含む"}
-  ],
-  "pass_score": 7.0
+    "hard_constraints": [{ "kind": "word_count", "min": 80, "max": 200 }],
+    "criteria": [
+        { "name": "Clarity", "weight": 1.0, "desc": "Main point is clear on first reading" },
+        { "name": "Completeness", "weight": 1.0, "desc": "Includes all specified elements" }
+    ],
+    "pass_score": 7.0
 }
 ```
 
-- まず `hard_constraints`（constraint と同じ kind 群）を**決定的ゲート**として評価。
-- judge クライアントがある場合: rubric で judge に 0–10 採点させ（`quality.judge.seeds` 回の平均、
-  self-preference 回避のため judge≠候補モデル推奨）。`quality = score×10`、
-  `resolved = (hard全通過) かつ (score ≥ pass_score)`。judge 一致のばらつきを `components` に残す。
-- **judge クライアントが無い場合（validate/mock 含む）**: 決定的な hard_constraints のみで判定
-  （`resolved = hard全通過`, `quality = 100/0`）。これで validate は決定的に緑を保てる。
-- **validate**: `mock_gold` は `gold_answer.md`（hard 通過）→ 成功。`mock_broken` → 失敗。
+- Evaluates `hard_constraints` first as a **deterministic gate** (using the same kinds as `constraint`).
+- When a judge client is available: Scores 0–10 based on criteria in rubric (average across `quality.judge.seeds` trials; recommended `judge != candidate model` to avoid self-preference). `quality = score × 10`, `resolved = (all hard constraints pass) AND (score ≥ pass_score)`. Variance across judge evaluations is retained in `components`.
+- **When no judge client is available (including validate/mock runs)**: Evaluates strictly using deterministic `hard_constraints` (`resolved = all hard constraints pass`, `quality = 100 / 0`). This ensures `llmbench validate` remains deterministically green.
+- **Validation**: `mock_gold` outputs `gold_answer.md` (passes hard constraints) → PASS. `mock_broken` → FAIL.
 
-## 4. タスク・ディレクトリ規約
+## 4. Task Directory Conventions
 
 ```
 tasks/
   s01_pathtrav/            # detection
-    issue.md / issue_ja.md   #   指示文 + 解析対象（ログ/コードを本文に含める）
-    gold.json                #   検出ラベル
+    issue.md / issue_ja.md   # Prompt + analysis target (embed logs/code directly in body)
+    gold.json                # Detection labels
   g01_json_summary/         # constraint
-    issue.md / issue_ja.md   #   プロンプト
-    checks.json              #   チェック配列
-    gold_answer.md           #   validate用の合格回答
+    issue.md / issue_ja.md   # Prompt
+    checks.json              # Check conditions array
+    gold_answer.md           # Reference passing response for validation
   w01_release_note/         # judge
     issue.md / issue_ja.md
     rubric.json
     gold_answer.md
+
 ```
 
-コード系のような `buggy_code/` `gold/` `tests/` は不要。`tasks.py` は `buggy_code/` 欠落を許容する。
+Coding-specific subdirectories like `buggy_code/`, `gold/`, and `tests/` are not required. `tasks.py` accommodates missing `buggy_code/` directories.
 
-## 5. 台帳と CLI
+## 5. Ledgers and CLI Options
 
-新規台帳（既定では読まれない）: `tasks_sec.jsonl` / `tasks_gen.jsonl` / `tasks_write.jsonl`。
-レコードに `grader` と `domain` と `difficulty` を持たせる:
+New ledgers (not loaded by default): `tasks_sec.jsonl`, `tasks_gen.jsonl`, `tasks_write.jsonl`.
+Records contain `grader`, `domain`, and `difficulty` attributes:
 
 ```json
 {"task_id":"s01","dir":"s01_pathtrav","grader":"detection","domain":"security","difficulty":"sec_medium","title":"..."}
 {"task_id":"g01","dir":"g01_json_summary","grader":"constraint","domain":"general","difficulty":"gen_easy","title":"..."}
 {"task_id":"w01","dir":"w01_release_note","grader":"judge","domain":"writing","difficulty":"write_basic","title":"..."}
+
 ```
 
-CLI フラグ（`--with-l6/l7` と同じ体系）:
+CLI Flags (aligned with `--with-l6/l7` flag architecture):
 
-| フラグ | 意味 |
-|---|---|
-| `--with-sec` / `--with-gen` / `--with-write` | 既定40問に各ドメイン台帳を上乗せ |
-| `--only-sec` / `--only-gen` / `--only-write` | 既定を除外し当該ドメインのみ実行（分割運用） |
+| Flag                                         | Description                                                               |
+| -------------------------------------------- | ------------------------------------------------------------------------- |
+| `--with-sec` / `--with-gen` / `--with-write` | Appends domain ledgers onto default 40 tasks                              |
+| `--only-sec` / `--only-gen` / `--only-write` | Excludes defaults to execute target domain exclusively (split operations) |
 
-`certify --merge` で分割実行結果を統合できる（既存機構をそのまま利用）。
+Split execution outputs can be merged using `certify --merge` via existing mechanisms.
 
-## 6. certify 拡張 — ドメイン別 + バランス指数
+## 6. Certification Extensions — Domain-Specific Gates & Balance Index
 
-コーディングの L1–L7 認証は不変。追加で:
+Coding L1–L7 certifications remain unchanged. Added capabilities:
 
-- results の各タスクが持つ `domain` で集計し、**ドメイン別ゲート**を適用（`certify_domains`）。
+- Aggregates tasks by `domain` field in results to apply **domain-specific certification gates** (`certify_domains`).
 
-| Domain | 既定 gate（暫定） | 備考 |
-|---|---|---|
-| security | success ≥ 0.6 かつ combined ≥ 60 | 検出は過検出も combined に反映 |
-| general | success ≥ 0.7 かつ combined ≥ 65 | 指示追従は高めに |
-| writing | success ≥ 0.5 かつ combined ≥ 55 | **experimental**（未較正） |
+| Domain   | Default Gate (Provisional)      | Notes                                      |
+| -------- | ------------------------------- | ------------------------------------------ |
+| security | success ≥ 0.6 AND combined ≥ 60 | Over-detection impacts combined score      |
+| general  | success ≥ 0.7 AND combined ≥ 65 | Higher threshold for instruction following |
+| writing  | success ≥ 0.5 AND combined ≥ 55 | **experimental** (uncalibrated)            |
 
-- **バランス指数**: 測定済み各ドメイン（coding 含む）の平均 combined を 0–1 に正規化し、
-  **調和平均**で合成（弱いドメインに厳しい）。一芸特化スパイクを1枚で炙り出す。
-  writing は experimental のため既定でバランス指数から除外（フラグで含めることは可）。
-- 混ぜて単一平均にしない（コード満点が創作の低さを隠すのを防ぐ）。
+- **Balance Index**: Normalizes average combined score across all evaluated domains (including coding) to 0–1 scale, synthesizing them via **harmonic mean** (heavily penalizes weak domain performances). Exposes single-capability spikes in a single metric.
+  Writing is excluded from Balance Index calculation by default due to its experimental status (can be included via flag).
+  Prevents high coding scores from masking low writing performance by avoiding simple unweighted averages.
 
-## 7. config 追加
+## 7. Configuration Parameters
 
 ```yaml
 graders:
-  detection: {pass_f1: 0.67}
-  constraint: {pass_ratio: 1.0}
-  judge: {pass_score: 7.0}
+    detection: { pass_f1: 0.67 }
+    constraint: { pass_ratio: 1.0 }
+    judge: { pass_score: 7.0 }
 quality:
-  judge:
-    enabled: false          # 別系統の judge を起動しているとき true
-    judge_model: local-openai
-    seeds: 1
+    judge:
+        enabled: false # Set to true when running separate judge model
+        judge_model: local-openai
+        seeds: 1
 certify_domains:
-  security: {min_success: 0.6, min_combined: 60}
-  general:  {min_success: 0.7, min_combined: 65}
-  writing:  {min_success: 0.5, min_combined: 55, experimental: true}
+    security: { min_success: 0.6, min_combined: 60 }
+    general: { min_success: 0.7, min_combined: 65 }
+    writing: { min_success: 0.5, min_combined: 55, experimental: true }
 ```
 
-## 8. 実装フェーズ
+## 8. Implementation Phases
 
-- **Phase 1（本仕様）**: grader フレームワーク + detection/constraint/judge、各ドメイン数問、
-  CLI/certify/report/config 配線、validate 緑化。judge は experimental。
-- **Phase 2（将来）**: 実モデル較正でドメインゲート確定、judge の多系統化と一致率の本採用、
-  各ドメインの sub-tier 化（sec_easy/…/sec_hard を独立 gate に）、タスク増補（各20–40問）。
+- **Phase 1 (Current Specification)**: Grader framework + detection/constraint/judge implementations, initial task sets per domain, CLI/certify/report/config integration, validation pipeline greening. Judge marked as experimental.
+- **Phase 2 (Future)**: Finalize domain gates via empirical model calibration, multi-judge engine support with agreement metric integration, sub-tiering per domain (`sec_easy` through `sec_hard` as independent gates), expansion of task ledgers (20–40 tasks each).
 
-## 9. 後方互換性
+## 9. Backward Compatibility
 
-- `grader` 未指定のレコードは `code` 既定 → 既存タスクは無改修で従来通り。
-- 既定台帳（`tasks.jsonl`）だけの実行は結果・validate・スコアが現状と一致する。
-- 新規フィールド（`domain` 等）は results.json に増えるだけで、既存 `certify`/`compare` は無視して動く。
+- Records omitting `grader` field default to `code` → existing task behavior remains completely unmodified.
+- Running only default ledger (`tasks.jsonl`) produces identical results, validation passes, and scores as previous versions.
+- New schema fields (such as `domain`) append safely to `results.json`; existing `certify` and `compare` operations ignore unneeded fields safely.

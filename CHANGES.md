@@ -1,294 +1,246 @@
-# 🔁 通信リトライ: OpenAI互換クライアントに transient error retry
+# 🔁 Communication Retry: Transient Error Retry for OpenAI-Compatible Clients
 
-QwenCloud等クラウドAPIで単発の `Read timed out` / `Connection reset` が起きた際、
-生成が **1回で失点扱いになる問題** を修正しました。
+Fixed an issue where single-shot `Read timed out` or `Connection reset` errors caused generations to be **treated as immediate score deductions (failures)** when using cloud APIs like QwenCloud.
 
-| 追加/変更 | 内容 |
-|---|---|
-| 🔁 `llmbench/clients/openai_compat.py` | 通信起因の一時的失敗 (`ConnectionError` / `Timeout` / `ChunkedEncodingError` / `ConnectionResetError`) を指数バックオフで再試行。既定 2 回リトライ (合計 3 回試行)、初回遅延 2 秒 (2s → 4s)。HTTP 4xx/5xx や JSON パースエラーは retry しない (原因が呼び出し側にあり retry しても直らない)。 |
-| ⚙️ `config.yaml` | `transient_retries` / `transient_backoff` を model 別に上書き可能 (既定 2 / 2.0)。既存 config は変更不要 (デフォルト有効)。 |
-| 📝 実装 | 既存 `_generate` を `_post_once` に rename、新しい `_generate` は retry ラッパー。既存 `LLMClient.generate` の呼び出し規約は完全互換。 |
+| Addition/Change                        | Content                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🔁 `llmbench/clients/openai_compat.py` | Automatically retries transient network-induced failures (`ConnectionError` / `Timeout` / `ChunkedEncodingError` / `ConnectionResetError`) using exponential backoff. Default: 2 retries (3 total attempts), initial delay of 2 seconds (2s → 4s). HTTP 4xx/5xx and JSON parsing errors are not retried (since the cause originates on the caller side and retrying won't fix it). |
+| ⚙️ `config.yaml`                       | `transient_retries` / `transient_backoff` can be overridden per model (defaults: 2 / 2.0). Existing configs do not require modifications (enabled by default).                                                                                                                                                                                                                     |
+| 📝 Implementation                      | Renamed existing `_generate` to `_post_once`; the new `_generate` acts as a retry wrapper. Full backward compatibility with the existing calling convention of `LLMClient.generate` is maintained.                                                                                                                                                                                 |
 
-**背景**: L7 v2 の実測較正 (qwen-coding, 2026-07-21) で 16 タスク中 **3 タスク** が
-`HTTPSConnectionPool ... Read timed out (read timeout=600)` で失点。これらは
-モデル要因ではなく Alibaba Cloud API 側の単発通信断であり、runs=1 での失点として
-扱うと実力評価にノイズが乗る。retry 追加後は 1 タスクの生成が最大 3 回試行される
-(既定)。
+**Background**: In actual calibration measurements for L7 v2 (qwen-coding, 2026-07-21), **3 out of 16 tasks** resulted in point deductions due to `HTTPSConnectionPool ... Read timed out (read timeout=600)`. These were single-shot communication drops on the Alibaba Cloud API side rather than model failures; counting them as failures under `runs=1` introduces noise into capability evaluations. After adding retries, a single task generation will be attempted up to 3 times (default).
 
-**検証**: syntax OK。既存の `openai_compat.py` の呼び出し規約 (base.py `LLMClient.generate`)
-との互換性維持。retry ログは stderr に出力 (`⚠️ transient error on qwen-coding
-(attempt 1/3): ReadTimeout: ... — retry in 2.0s`)。
+**Verification**: Syntax OK. Compatibility with the calling convention of existing `openai_compat.py` (`LLMClient.generate` in `base.py`) was maintained. Retry logs are output to stderr (`⚠️ transient error on qwen-coding (attempt 1/3): ReadTimeout: ... — retry in 2.0s`).
 
 ---
 
+# 🆕 Multi-Domain Evaluation — security / general / writing / medical (Pluggable Grader)
 
-# 🆕 マルチドメイン評価 — security / general / writing / medical (pluggable grader)
+Expanded the evaluation framework—previously dedicated to coding—to other capabilities by making **graders pluggable**. Each grader includes an "output contract (prompt)" and "scoring", and normalizes results back to `(resolved, quality)` for return. Thus, pass@k, combined score, usability, and certification features are shared **without modification**. **Default behavior and existing scores remain unchanged** (when `grader` is unspecified, it defaults to `code`; running only default ledgers yields identical results).
 
-コーディング専用だった評価を、**採点器(grader)を差し替え可能**にして他能力へ横展開しました。
-各 grader は「出力契約(プロンプト)」と「採点」を持ち、最終的に `(resolved, quality)` に
-正規化して返すため、既存の pass@k / combined / usability / certify は**無改修**で共有されます。
-**既定の挙動・既存スコアは不変**（`grader` 未指定は `code`、既定台帳のみの実行は結果一致）。
+| Domain      | Grader     | Ledger / Flag                                     | Scoring                                                                                                                                                                     |
+| ----------- | ---------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🛡️ security | detection  | tasks_sec.jsonl / `--with-sec` `--only-sec`       | Precision / Recall / F1 for vulnerability and breach detection. Penalizes false positives (FP) using **clean decoys**.                                                      |
+| 📋 general  | constraint | tasks_gen.jsonl / `--with-gen` `--only-gen`       | Programmatically verifies instruction following IFEval-style (character length / JSON / regex...). Success if all checks pass; pass rate represents `quality`.              |
+| ✍️ writing  | judge      | tasks_write.jsonl / `--with-write` `--only-write` | 0–10 scoring via rubric + judge (experimental). Deterministic judgment based on hard constraints only when judge is unavailable.                                            |
+| 🩺 medical  | qa         | tasks_med.jsonl / `--with-med` `--only-med`       | Matches medical QA against answer keys. Includes **Japanese/English allowed terms** in gold → Japanese models with `--lang ja` are also scored correctly (reference value). |
 
-| ドメイン | grader | 台帳 / フラグ | 採点 |
-|---|---|---|---|
-| 🛡️ security | detection | tasks_sec.jsonl / `--with-sec` `--only-sec` | 脆弱性/侵害の検出を precision/recall/F1。**クリーンなデコイ**で過検出(FP)を罰する |
-| 📋 general | constraint | tasks_gen.jsonl / `--with-gen` `--only-gen` | 指示追従を IFEval式に機械検証(文字数/JSON/正規表現…)。全通過で成功、通過率が quality |
-| ✍️ writing | judge | tasks_write.jsonl / `--with-write` `--only-write` | rubric+judgeで0–10採点(experimental)。judge無しは hard制約のみで決定的判定 |
-| 🩺 medical | qa | tasks_med.jsonl / `--with-med` `--only-med` | 医療QAをアンサーキー照合。gold に**日英許容語**→ `--lang ja` のJPモデルも正答扱い(参考値) |
+| Addition/Change            | Content                                                                                                                                                                                                                                                                                                   |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🌐 `llmbench/graders/`     | base/registry + `checks.py` (IFEval) + `code`/`detection`/`constraint`/`judge`/`qa`                                                                                                                                                                                                                       |
+| 🚩 CLI                     | Added `--with-sec/gen/write/med` and `--only-*` (same architecture as `--with-l6/l7`). Extended `_ledgers()`.                                                                                                                                                                                             |
+| 🎓 `certify`               | Domain gates + **Balance Index** (harmonic mean of coding + non-experimental domains to penalize single-trick specializations) + Medical accuracy broken down by difficulty (basic/std/hard).                                                                                                             |
+| ⚙️ config                  | Config entries for `graders:` (pass_f1 / pass_ratio / pass_score), `quality.judge:`, and `certify_domains:`.                                                                                                                                                                                              |
+| 📊 report                  | Added domain-specific summary sections.                                                                                                                                                                                                                                                                   |
+| 🩺 24 Medical QA Questions | Pharmacology, Cardiology, Emergency, Endocrinology, Infection, Nephrology, Neurology, Pediatrics, OB/GYN, Toxicology. **Fact-checked by independent agents**. Includes MCQ + short answer, difficulties: basic/std/hard. Japanese medical models can also be measured via Japanese/English allowed terms. |
+| 📐 Specifications          | `DESIGN_DOMAINS.md` (Pluggable grader architecture, schemas, and scoring rules).                                                                                                                                                                                                                          |
 
-| 追加/変更 | 内容 |
-|---|---|
-| 🌐 `llmbench/graders/` | base/registry + `checks.py`(IFEval) + `code`/`detection`/`constraint`/`judge`/`qa` |
-| 🚩 CLI | `--with-sec/gen/write/med` と `--only-*`(`--with-l6/l7` と同体系)。`_ledgers()` を拡張 |
-| 🎓 `certify` | ドメイン別ゲート + **バランス指数**(coding＋非experimentalの調和平均で一芸特化を減点) + 医療の難易度別正答率(basic/std/hard) |
-| ⚙️ config | `graders:`(pass_f1 / pass_ratio / pass_score)・`quality.judge:`・`certify_domains:` |
-| 📊 report | ドメイン別サマリ節を追加 |
-| 🩺 医療QA 24問 | 薬理/循環器/救急/内分泌/感染/腎/神経/小児/産婦/中毒。**独立エージェントでファクトチェック済**。MCQ＋短答、難易度 basic/std/hard、日英許容語で JP 医療モデルも測定可 |
-| 📐 仕様書 | `DESIGN_DOMAINS.md`(pluggable grader の設計・各スキーマ・採点規約) |
+**Verification**: `llmbench validate --only-sec|gen|write|med` all PASSED (all gold succeeded, all broken failed).
+Verified grader discrimination tests (correct answer → high score / ambiguous → 0 / decoy over-detection → precision 0 fail / 4 bullet points → 75 points), as well as correct/incorrect disqualifications for Japanese answers (e.g., "IM adrenaline injection", "subarachnoid hemorrhage").
 
-**検証**: `llmbench validate --only-sec|gen|write|med` が全て PASS(gold全成功・broken全失敗)。
-grader 判別テスト(正答→高スコア / 曖昧→0 / デコイ過検出→precision0で失格 / 4個の箇条書き→75点)、
-および日本語回答(「アドレナリンを筋注」「くも膜下出血」等)が正答・誤答が失格することを確認。
-
-> 注: writing/medical のゲート閾値は暫定(未較正)。医療は臨床的妥当性の保証ではなく
-> 参考値(5択MCQのチャンス正答率≈20%)。判定は `certify.py` の `DEFAULT_DOMAIN_GATES` /
-> `DEFAULT_MED_GATES`、`config.yaml` の `graders:` / `certify_domains:` で調整可能。
+> Note: Gate thresholds for writing/medical are provisional (uncalibrated). Medical scores are reference values (5-choice MCQ chance accuracy ≈ 20%) rather than guarantees of clinical validity. Judgments can be tuned via `DEFAULT_DOMAIN_GATES` / `DEFAULT_MED_GATES` in `certify.py` and `graders:` / `certify_domains:` in `config.yaml`.
 
 ---
 
-# 🆕 分割実行対応 — `--only-l6` / `--only-l7` と `certify --merge`
+# 🆕 Split Execution Support — `--only-l6` / `--only-l7` and `certify --merge`
 
-L6/L7 を含めた全問実行は時間がかかるため、**先に既定40問だけ実行し、後日 L6/L7 だけを
-追加実行して、最後に統合認証する分割運用**に対応しました。**既定の挙動・既存
-`--with-l6`/`--with-l7` は不変**です。`--only-l6`/`--only-l7` を付けたときだけ、既定台帳
-`tasks.jsonl` を除外して指定tierだけを実行します（list-tasks / run / validate 共通）。
+Because running all questions including L6/L7 takes considerable time, we added support for **split operations: run only the default 40 questions first, run L6/L7 later as needed, and finally merge them into a single consolidated certification**. **Default behavior and existing `--with-l6`/`--with-l7` flags remain unchanged**. Only when `--only-l6`/`--only-l7` is specified will the default ledger `tasks.jsonl` be excluded to execute only the designated tier (shared across list-tasks / run / validate).
 
-| 指定 | 対象問題 | 問題数 |
-|---|---|---|
-| なし | 既定40問 | 40 |
-| `--with-l6` | 既定40問 + L6 20問 | 60 |
-| `--with-l7` | 既定40問 + L7 40問 | 80 |
-| `--with-l6 --with-l7` | 既定40問 + L6 20問 + L7 40問 | 100 |
-| `--only-l6` | L6 20問のみ（baseなし） | 20 |
-| `--only-l7` | L7 40問のみ（baseなし） | 40 |
-| `--only-l6 --only-l7` | L6 20問 + L7 40問（baseなし） | 60 |
-| `--only-l6 --with-l7` | L6 20問 + L7 40問（onlyが1つでもあればbase除外・最終集合はonly/withの和集合） | 60 |
-| `--only-l6 --with-l6` | L6 20問（二重追加なし） | 20 |
+| Flag                  | Target Questions                                                                                                                                    | Question Count |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| None                  | Default 40 questions                                                                                                                                | 40             |
+| `--with-l6`           | Default 40 questions + L6 (20 questions)                                                                                                            | 60             |
+| `--with-l7`           | Default 40 questions + L7 (40 questions)                                                                                                            | 80             |
+| `--with-l6 --with-l7` | Default 40 questions + L6 (20 questions) + L7 (40 questions)                                                                                        | 100            |
+| `--only-l6`           | L6 (20 questions only, no base)                                                                                                                     | 20             |
+| `--only-l7`           | L7 (40 questions only, no base)                                                                                                                     | 40             |
+| `--only-l6 --only-l7` | L6 (20 questions) + L7 (40 questions) (no base)                                                                                                     | 60             |
+| `--only-l6 --with-l7` | L6 (20 questions) + L7 (40 questions) (If at least one `--only` flag is present, base is excluded; final set is the union of `--only` and `--with`) | 60             |
+| `--only-l6 --with-l6` | L6 (20 questions) (no duplicate additions)                                                                                                          | 20             |
 
-| 追加 | 内容 |
-|---|---|
-| 🔀 `--only-l6` / `--only-l7` | list-tasks / run / validate 共通の `_common_args` に追加。既定台帳 `tasks.jsonl` を除外し、指定tierの台帳だけを対象にする。`--with-l6`/`--with-l7`・`--l6-ledger`/`--l7-ledger` はそのまま併用可 |
-| 🔗 `certify --merge` | 複数 `results.json` の `results` 配列を合算して1つのtier認証を出す。`llmbench certify --merge a.json b.json` / llmbench非依存の単体スクリプト `python3 certify.py --merge a.json b.json` の両方に対応 |
-| 🧮 `merge_results()` | task_id 重複は**後勝ち**（後に指定したファイルを優先。再測定結果で上書きする意図）。モデル名は各ファイルの `model` を出現順distinctで `" + "` 連結（同一なら1つ）。`--runs` 数が異なる結果同士の合算も可（タスク単位のsuccess_rate平均で集計するため破綻はしないが、tier内で試行数が不均一になる点は注意） |
+| Addition                     | Content                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🔀 `--only-l6` / `--only-l7` | Added to `_common_args` shared across list-tasks / run / validate. Excludes default ledger `tasks.jsonl` and targets only the ledgers of specified tiers. Can be combined directly with `--with-l6`/`--with-l7` and `--l6-ledger`/`--l7-ledger`.                                                                                                                                                                                                                                                     |
+| 🔗 `certify --merge`         | Merges the `results` array across multiple `results.json` files to generate a single tier certification output. Supported via both `llmbench certify --merge a.json b.json` and standalone non-llmbench script `python3 certify.py --merge a.json b.json`.                                                                                                                                                                                                                                           |
+| 🧮 `merge_results()`         | Duplicate `task_id`s use **last-wins logic** (prioritizes the file specified later, intended to overwrite with re-measurement results). Model names are concatenated with `" + "` using distinct ordering of appearance in each file (single entry if identical). Merging results with different `--runs` counts is also supported (aggregates via task-level `success_rate` average, so calculations will not break, though care should be taken regarding non-uniform trial counts within a tier). |
 
-**推奨フロー**: `llmbench run`（既定40問）→ 後日 `llmbench run --only-l6`（L6の20問だけ）
-→ `llmbench certify --merge base.json l6.json` で L1〜L6 の統合認証を1回で出す。
+**Recommended Flow**: `llmbench run` (default 40 questions) → `llmbench run --only-l6` later (L6 20 questions only) → `llmbench certify --merge base.json l6.json` to generate unified certification for L1–L6 in a single run.
 
-**検証**: `list-tasks --only-l6`=20 / `--only-l7`=40 / `--only-l6 --only-l7`=60 を確認。
-追加テスト `tests/test_ledgers.py`（台帳選択マトリクス）・`tests/test_certify_merge.py`
-（`merge_results` の後勝ち・モデル名連結・runs混在）で検証。
+**Verification**: Verified `list-tasks --only-l6` = 20 / `--only-l7` = 40 / `--only-l6 --only-l7` = 60.
+Verified via additional tests in `tests/test_ledgers.py` (ledger selection matrix) and `tests/test_certify_merge.py` (last-wins logic in `merge_results`, model name concatenation, mixed runs).
 
 ---
 
-# 🆕 L7 grandmaster tier (t061–t100) — 任意オプション `--with-l7`
+# 🆕 L7 Grandmaster Tier (t061–t100) — Optional Flag `--with-l7`
 
-L6 architect でも上位帯(27B dense)がほぼ踏破し（最上位2モデル差=実質1問、生きた弁別
-タスクは t059/t047/t046/t043 の4問程度）、再び天井効果が発生。**天井評価用の40問
-(L7 grandmaster)** を追加しました。**既定の挙動は不変**（従来どおり40問、`--with-l6`
-で60問）で、`--with-l7` を付けたときだけ +40 されます。
+Even under L6 architect, top-tier models (27B dense) cleared almost all tasks (difference between the top two models was effectively 1 question, with active discriminating tasks reduced to ~4: t059/t047/t046/t043), creating a ceiling effect once again. Added **40 ceiling-evaluation questions (L7 grandmaster)**. **Default behavior remains unchanged** (40 questions as before, 60 questions with `--with-l6`), and +40 questions are added only when `--with-l7` is specified.
 
-| 追加 | 内容 |
-|---|---|
-| 🏔️ L7 grandmaster (t061–t100, 40問) | 5軸×8問: 数値安定性(t061-068) / 状態一貫性(t069-076) / 複数結合バグ(t077-084) / 深い並行性(t085-092) / 敵対的パース・セキュリティ(t093-100)。issueは症状のみ |
-| 🔀 `--with-l7` / `--l7-ledger` | 別台帳 `tasks/tasks_l7.jsonl` を任意マージ（既定40 → 80、`--with-l6`併用で100）。既存台帳は不変 |
-| 🕵️ 隠密性基準（新） | 全40問で buggy が `test_core`（回帰罠）を通過＝lintや正常系では見えないバグのみ |
-| 🎓 certify L7 gate | `grandmaster→L7`、暫定 pass@1 ≥ 35% かつ combined ≥ 55（実モデル較正で確定） |
+| Addition                                    | Content                                                                                                                                                                                                                       |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🏔️ L7 grandmaster (t061–t100, 40 questions) | 5 axes × 8 questions: Numerical Stability (t061–068) / State Consistency (t069–076) / Multi-Coupling Bugs (t077–084) / Deep Concurrency (t085–092) / Adversarial Parsing & Security (t093–100). Issues present symptoms only. |
+| 🔀 `--with-l7` / `--l7-ledger`              | Optionally merges external ledger `tasks/tasks_l7.jsonl` (default 40 → 80; 100 when combined with `--with-l6`). Existing ledgers remain unchanged.                                                                            |
+| 🕵️ Stealth Criterion (New)                  | Across all 40 questions, buggy implementations pass `test_core` (regression trap)—meaning bugs are invisible to linters or standard happy-path tests.                                                                         |
+| 🎓 Certify L7 Gate                          | `grandmaster → L7`, provisional pass@1 ≥ 35% and combined ≥ 55 (to be finalized via real model calibration).                                                                                                                  |
 
-**検証**: L7 selfcheck 40/40（gold緑/buggy赤/隠密性✓/ruff0）、軸Cは部分修正の不合格性、
-軸Dは gold 10回連続緑・buggy 10/10失敗の決定性を確認。`validate --with-l7`
-gold 40/40・broken 40/40、`list-tasks` 40（既定）/ 80（`--with-l7`）/ 100（`--with-l6 --with-l7`）。
-t098 のみ `perf_timeout: 30`（ReDoS性能検証）。
+**Verification**: L7 selfcheck 40/40 (gold green / buggy red / stealthiness ✓ / ruff 0). Axis C verified for failure on partial fixes; Axis D verified for determinism with 10 consecutive gold passes and 10/10 buggy failures. `validate --with-l7` confirmed gold 40/40 and broken 40/40; `list-tasks` confirmed 40 (default) / 80 (`--with-l7`) / 100 (`--with-l6 --with-l7`). Only t098 sets `perf_timeout: 30` (ReDoS performance check).
 
 ---
 
-# 🆕 `--concurrency`（試行の並列実行）— 総時間短縮オプション
+# 🆕 `--concurrency` (Parallel Execution of Trials) — Total Time Reduction Option
 
-`--runs N` の各試行を同時実行する `--concurrency K`（既定1=直列）を追加。
-llama.cpp を `--parallel K -cb` で起動した場合に有効。`run.concurrency` でも既定値を設定可。
+Added `--concurrency K` (default 1 = sequential) to run each trial in `--runs N` concurrently. Effective when launching llama.cpp with `--parallel K -cb`. Default value can also be set via `run.concurrency`.
 
-| 追加 | 内容 |
-|---|---|
-| 🔀 `--concurrency K` / `run.concurrency` | 試行(runs)を `ThreadPoolExecutor` で並列化（`min(K, runs)`）。MockClient は直列フォールバック |
+| Addition                                 | Content                                                                                                                           |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 🔀 `--concurrency K` / `run.concurrency` | Parallelizes trial execution (`runs`) using `ThreadPoolExecutor` (`min(K, runs)`). MockClient falls back to sequential execution. |
 
-**トレードオフ**: 総終了時間↓（実測 約2.2倍速）／1ストリーム tok/s↓（264→110）。
-正答率・品質は不変。速度計測は `--concurrency 1` 推奨。
+**Trade-off**: Total runtime ↓ (~2.2x speedup in measurements) / single stream tok/s ↓ (264 → 110). Accuracy and quality are unaffected. Benchmark speed measurements recommend `--concurrency 1`.
 
 ---
 
-# 🆕 L6 architect tier (t041–t060) — 任意オプション `--with-l6`
+# 🆕 L6 Architect Tier (t041–t060) — Optional Flag `--with-l6`
 
-frontier(L5)でも上位帯(27B〜35B級)が再び天井効果を起こすため、**さらに難しい
-20問 (L6 architect)** を追加しました。**既定の挙動は不変**（従来どおり40問）で、
-`--with-l6` を付けたときだけ +20 されます。
+Because top-tier models (27B–35B class) hit ceiling effects again in frontier (L5), we added **an even more challenging set of 20 questions (L6 architect)**. **Default behavior remains unchanged** (40 questions as before); +20 questions are added only when `--with-l6` is appended.
 
-| 追加 | 内容 |
-|---|---|
-| 🏛️ L6 architect (t041–t060, 20問) | 複数ファイル8 / 非機能(perf)6 / 曖昧仕様4 / 罠・敵対2。issueは症状のみ |
-| 🔀 `--with-l6` / `--l6-ledger` | 別台帳 `tasks/tasks_l6.jsonl` を任意マージ（既定40 → 60）。`tasks.jsonl` は不変 |
-| 🧩 複数台帳ローダ | `load_tasks(..., ledgers=[...])`（id先勝ち）・`BenchmarkRunner(ledgers=...)` |
-| 🎓 certify L6 gate | `architect→L6`、暫定 pass@1 ≥ 55% かつ combined ≥ 60（実モデル較正で確定） |
+| Addition                                  | Content                                                                                                                 |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 🏛️ L6 architect (t041–t060, 20 questions) | Multi-file (8) / Non-functional perf (6) / Ambiguous specs (4) / Traps & Adversarial (2). Issues present symptoms only. |
+| 🔀 `--with-l6` / `--l6-ledger`            | Optionally merges external ledger `tasks/tasks_l6.jsonl` (default 40 → 60). `tasks.jsonl` remains unchanged.            |
+| 🧩 Multi-Ledger Loader                    | `load_tasks(..., ledgers=[...])` (first ID wins) / `BenchmarkRunner(ledgers=...)`.                                      |
+| 🎓 Certify L6 Gate                        | `architect → L6`, provisional pass@1 ≥ 55% and combined ≥ 60 (to be finalized via real model calibration).              |
 
-**検証**: L6 selfcheck 20/20（gold緑/buggy赤/ruff0/CC A–B）、`validate --with-l6`
-gold 20/20・broken 20/20、`list-tasks` 40（既定）/ 60（`--with-l6`）。
+**Verification**: L6 selfcheck 20/20 (gold green / buggy red / ruff 0 / CC A–B). `validate --with-l6` confirmed gold 20/20 and broken 20/20; `list-tasks` confirmed 40 (default) / 60 (`--with-l6`).
 
 ---
 
-# 難問tier (L4/L5) + 使えるライン認証 (certify)
+# High-Difficulty Tiers (L4/L5) + Usability Line Certification (certify)
 
-上位ローカルコーダーが既存20問(easy/medium/hard)で頭打ちになり差がつかない
-**天井効果**を解消するため、難問tierを追加し、「ここまでクリアできれば使える」を
-tier合格制で判定する仕組みを導入しました。
+To resolve the **ceiling effect** where high-performing local coders reached a plateau on the existing 20 questions (easy/medium/hard) with no clear differentiation, we added high-difficulty tiers and introduced a tier-pass system to evaluate "is this model practical to use if it passes here?".
 
-| 追加 | 内容 |
-|---|---|
-| 🧩 L4 expert (t021–t032, 12問) | 仕様の細部・アルゴリズム正確性を問う難問 |
-| 🧩 L5 frontier (t033–t040, 8問) | 複数ファイル・回帰罠・性能制約。4問は2つの結合バグ入り |
-| 📝 症状ベースの issue | 新tierは修正手順を書かず**原因診断**を要求 (天井効果の主因対策) |
-| 🎓 `llmbench certify` | 難易度→tier(L1-L5)、**L4独立合格=使えるライン**を判定 |
-| ⏱️ per-task `perf_timeout` | 性能制約タスク向けにタスク別タイムアウトを採用 |
+| Addition                                | Content                                                                                                                                       |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🧩 L4 expert (t021–t032, 12 questions)  | Challenging tasks demanding specification detail mastery and algorithmic accuracy.                                                            |
+| 🧩 L5 frontier (t033–t040, 8 questions) | Multi-file tasks, regression traps, and performance constraints. 4 tasks contain two coupled bugs.                                            |
+| 📝 Symptom-based Issues                 | New tiers omit step-by-step fix instructions and instead require **root-cause diagnosis** (addressing the main driver of the ceiling effect). |
+| 🎓 `llmbench certify`                   | Maps difficulties → tiers (L1–L5), evaluating **L4 independent pass = usability threshold**.                                                  |
+| ⏱️ Per-task `perf_timeout`              | Introduced per-task timeouts for performance-constrained tasks.                                                                               |
 
-**検証**: selfcheck 新20問 20/20、`llmbench validate` 40/40 (gold全緑/broken全失敗)、
-`llmbench list-tasks` total 40 (easy5/medium5/hard10/expert12/frontier8)。
+**Verification**: Selfcheck for 20 new tasks 20/20, `llmbench validate` 40/40 (all gold green / all broken fail), `llmbench list-tasks` total 40 (easy 5 / medium 5 / hard 10 / expert 12 / frontier 8).
 
-> 較正メモ: 3モデル(7b/14b/30b)×5の実測で死蔵タスク・難易度逆転・issueの過剰ヒントを
-> 検出し、issue症状化・frontier 2バグ化・certify非累積化に反映済み。tier閾値
-> (`DEFAULT_GATES`) は暫定で、難化後の再実行で確定予定。
+> Calibration Note: Empirical evaluations using 3 models (7b/14b/30b) × 5 runs identified dormant tasks, difficulty inversions, and excessive issue hints, which were resolved by shifting issues to symptom-based descriptions, creating double-bug frontier tasks, and making certification non-cumulative. Tier thresholds (`DEFAULT_GATES`) are provisional and will be finalized after rerunning benchmarks on the increased difficulty set.
 
 ---
 
-# 🆕 llmbench 機能追加（「実際どれくらい使えるか」を測る）
+# 🆕 New Features in `llmbench` (Measuring Practical Usability)
 
-「ベンチのスコアは出るが、実際どれくらい使えるか分かりづらい」を解消するため、
-**参照モデル比較 / pass@k信頼性 / usabilityティア / 難タスク** の4機能を追加し、
-さらに **モデル運用の簡素化（model:auto・Ollama動的）** と **レポート表示の改善** を加えました。
+To solve the issue where "benchmark scores are generated, but it is hard to tell how usable the model actually is in practice," we added 4 key features: **Reference Model Comparison / pass@k Reliability / Usability Tiers / High-Difficulty Tasks**, alongside **Simplified Model Operations (model:auto / Dynamic Ollama)** and **Improved Report Displays**.
 
-> 本ファイルは新機能の要約・使い方・検証結果です。
-> 詳しい運用は `MANUAL.md`（既存）、利用手順は `USAGE.md` を参照。
+> This document summarizes new features, usage, and validation results.
+> For detailed operations, see `MANUAL.md` (existing); for setup procedures, see `USAGE.md`.
 
 ---
 
-## なぜこの4つか
+## Why These 4 Features?
 
-ベンチ結果が「使えるか」に直結しなかった理由は2つ。**基準（アンカー）がない**ことと、
-**タスクが天井に張り付いて差が出ない**こと。さらに「使える＝最高スコア」ではなく
-**使える＝成功率 × 信頼性 × 速度**です。これを測れるようにしました。
+Benchmark scores failed to translate directly into "practical usability" for two reasons: **lack of baselines (anchors)** and **tasks hitting score ceilings without differentiation**. Furthermore, "usable" does not equal "highest score"—**usable = success rate × reliability × speed**. These features make that measurable.
 
-| 機能 | 解決する問題 |
-|---|---|
-| ① 参照モデル比較 (`compare`) | 94.3点が高いか低いか分からない → 強/弱モデルと並べて位置づけ |
-| ② pass@k 信頼性 (`--runs`) | 1回成功＝使えるではない → N回試して成功率・pass@kを計測 |
-| ③ usabilityティア | 数値が行動に落ちない → 自律/補助/不可に翻訳 |
-| ④ 難タスク t016–t020 | 全問100%で差が出ない → 失敗が出る実務的タスクで天井を作る |
+| Feature                                  | Problem Solved                                                                                                               |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| ① Reference Model Comparison (`compare`) | A score of 94.3 is hard to evaluate in isolation → Contextualizes performance alongside strong/weak benchmark models.        |
+| ② pass@k Reliability (`--runs`)          | 1 success ≠ usable in production → Measures success rates and pass@k across N attempts.                                      |
+| ③ Usability Tiers                        | Raw metrics don't map to actions → Translates scores into Autonomous / Assisted / Unusable.                                  |
+| ④ High-Difficulty Tasks t016–t020        | 100% completion across the board obscures differences → Creates a realistic ceiling using practical, failure-inducing tasks. |
 
 ---
 
-## ① 参照モデル比較 `compare`
+## ① Reference Model Comparison `compare`
 
-複数の `results.json` を横断比較するレポートを生成します。APIキーは環境変数で渡せます
-（`config.yaml` に `${OPENAI_API_KEY}` で参照する `ref-gpt` を追加済み）。
+Generates cross-comparison reports across multiple `results.json` files. API keys can be passed via environment variables (added `ref-gpt` referencing `${OPENAI_API_KEY}` in `config.yaml`).
 
 ```bash
 export OPENAI_API_KEY=sk-...
-llmbench run --model local-openai --output results   # 自分のモデル
-llmbench run --model ref-gpt      --output results   # 強い参照(API)
+llmbench run --model local-openai --output results   # Target model
+llmbench run --model ref-gpt      --output results   # Strong reference (API)
 llmbench compare results/*_results.json --output results
+
 ```
 
-出力（`comparison_<stamp>.md`）には、Combined降順のランキング（相対スコア＝最良比）、
-usabilityティア比較、タスク別Combinedマトリクス（行内ベストを太字）が並びます。
+The output (`comparison_<stamp>.md`) includes rankings ordered by Combined score descending (relative score = ratio against best model), usability tier comparisons, and task-by-task Combined score matrices (bolding row-wise best scores).
 
-## ② pass@k 信頼性 `--runs N`
+## ② pass@k Reliability `--runs N`
 
-各タスクをN回サンプリングし、成功率・pass@1・pass@k（Chen et al. 2021 の不偏推定量）を計測。
-複数試行時は `combined = success_rate × (...)` となり、**信頼性がスコアに反映**されます。
+Samples each task N times to compute success rates, pass@1, and pass@k (unbiased estimator per Chen et al. 2021). During multi-run executions, `combined = success_rate × (...)`, directly reflecting **reliability in the overall score**.
 
 ```bash
-llmbench run --model local-openai --runs 5            # 5回試行
+llmbench run --model local-openai --runs 5            # 5 trials
 llmbench run --model local-openai --runs 5 --sample-temp 0.8
+
 ```
 
-- `runs=1`（既定）では従来と同じ挙動・数値（`combined` は `resolved×(...)` と一致）。
-- 部分成功は `flaky 3/5 passed` と記録され、レポートに成功率・pass@k列が増えます。
+- When `runs=1` (default), behavior and metrics remain identical to previous versions (`combined` matches `resolved × (...)`).
+- Partial successes are recorded as `flaky 3/5 passed`, adding success rate and pass@k columns to report outputs.
 
-## ③ usabilityティア
+## ③ Usability Tiers
 
-`success_rate` と `quality` から各タスクを **🟢自律 / 🟡補助 / 🔴不可** に分類し、
-難易度×ティアのマトリクスと総合判定をレポートに出力します。しきい値は `config.yaml`:
+Categorizes tasks into **🟢 Autonomous / 🟡 Assisted / 🔴 Unusable** based on `success_rate` and `quality`, generating difficulty-by-tier matrices and overall usability assessments in reports. Thresholds configured in `config.yaml`:
 
 ```yaml
 usability:
-  autonomous: {min_success: 0.9, min_quality: 80}   # レビューほぼ不要
-  assisted:   {min_success: 0.6, min_quality: 0}    # レビュー前提なら可
-  # 上記未満は unusable
+    autonomous: { min_success: 0.9, min_quality: 80 } # Requires almost no review
+    assisted: { min_success: 0.6, min_quality: 0 } # Usable assuming review process
+    # Below above thresholds = unusable
 ```
 
-`results.json` の `summary.usability` と各タスクの `usability_tier` にも入ります。
+Reflected in `summary.usability` and individual `usability_tier` fields within `results.json`.
 
-## ④ 難タスク t016–t020（全hard）
+## ④ High-Difficulty Tasks t016–t020 (All Hard)
 
-意図的に失敗が出る、実務的な難しさのタスクを5つ追加（天井を作るため）。
+Added 5 realistic, difficult tasks designed to fail probabilistically to establish score ceilings.
 
-| ID | テーマ | 難しさの種類 |
-|---|---|---|
-| t016 | 気温集計 (convert.py + report.py) | **複数ファイル**両方の修正が必要 |
-| t017 | slugify | **曖昧仕様**（エッジケースを推測） |
-| t018 | プラグインregistry | **既存の抽象（デコレータ）の理解** |
-| t019 | トライ木 search/starts_with | **状態バグ**（語末フラグ欠落） |
-| t020 | 式評価器 | **優先順位・括弧のリファクタ** |
-
----
-
-## ⑤ モデル運用の簡素化（config編集レス）
-
-ggufやモデルを差し替えるたびに `config.yaml` を書き換える手間をなくしました。
-
-- **`model: auto`** — 起動時に `/v1/models` からサーバのロード中モデルを自動採用。
-  レポート/結果ファイルも**その実モデル名でラベル**（`.gguf` は除去）。
-- **Ollama動的選択** — config未定義でも `--model <インストール済み名>` を直接指定可
-  （`/api/tags` から自動解決）。`llmbench models` で config + Ollama稼働モデルを一覧。
-- **`--label <名前>`** — ラベルを明示固定したいとき。
-- **APIキーの環境変数展開** — `api_key: "${OPENAI_API_KEY}"` で直書き回避。
-
-## ⑥ レポートの信頼性表示を改善（誤読の解消）
-
-- **pass@1（成功率）を主指標化** — `pass@5` は k=runs で退化（1回でも通れば1.0）し
-  誤解を生むため撤去。「平均成功率(pass@1)」と「≥1成功できたタスク」を分離表示。
-- **総合判定を保守的に** — 最頻ティアでの楽観表示をやめ、難易度別の割合＋
-  「🔴不可が1つでもあれば自律と言い切らない」推奨に変更。
-- **品質内訳に注記** — 多試行時、内訳は代表1試行・Qualityは平均である旨を明示。
+| ID   | Theme                                            | Source of Difficulty                                  |
+| ---- | ------------------------------------------------ | ----------------------------------------------------- |
+| t016 | Temperature Aggregation (convert.py + report.py) | Requires **multi-file** modifications.                |
+| t017 | Slugify                                          | **Ambiguous specifications** (deducing edge cases).   |
+| t018 | Plugin Registry                                  | **Understanding existing abstractions (decorators)**. |
+| t019 | Trie Search / starts_with                        | **State bugs** (missing end-of-word flags).           |
+| t020 | Expression Evaluator                             | **Operator precedence & parenthesis refactoring**.    |
 
 ---
 
-## 変更ファイル
+## ⑤ Simplified Model Operations (Config-Edit Free)
 
-追加: `llmbench/usability.py`, `llmbench/compare.py`, `tasks/t016_temps〜t020_calc/`
-変更: `llmbench/{runner,report,scoring,cli}.py`, `llmbench/clients/{openai_compat,ollama}.py`, `config.yaml`
+Eliminated the need to edit `config.yaml` every time GGUF files or models are swapped out.
 
-## 検証結果（すべてPASS）
+- **`model: auto`** — Automatically detects and adopts the server's actively loaded model via `/v1/models` on startup. Reports and results files are **labeled with the actual model name** (cleans `.gguf` suffixes).
+- **Dynamic Ollama Selection** — Directly specify unconfigured models via `--model <installed_name>` (auto-resolved via `/api/tags`). `llmbench models` lists both config-defined and active Ollama models.
+- **`--label <name>`** — Used to explicitly fix/override output labels.
+- **Environment Variable Expansion for API Keys** — Supports `api_key: "${OPENAI_API_KEY}"` to prevent hardcoding.
 
-- `llmbench validate` … **gold 20/20 resolved・broken 20/20 fail・PASS**（全20タスク）。
-- 新タスクの妥当性 … buggy_codeは全タスクでテスト失敗、gold適用で全タスク合格を個別確認。
-- pass@k単体 … 後方互換（`combined(True,88.6)=94.3`）、不偏推定量の値、flaky/不可分類を確認。
-- マルチラン実行 … 成功率・pass@k・usabilityの集計とレポート/JSON出力を確認。
-- compare … ランキング・相対スコア・マトリクス・APIキー環境変数展開を確認。
-- モデル解決 … `model:auto` のサーバ検出・ラベル整形・Ollama動的解決・未起動時の親切エラーを確認。
-- ruff（E,F,W,B,SIM,C4,S）… 追加・変更ファイルは指摘ゼロ。`compileall` OK。
+## ⑥ Improved Report Reliability Indicators (Eliminating Misinterpretations)
 
-## 後方互換・移行メモ
+- **Main Metric Shifted to pass@1 (Success Rate)** — Removed `pass@5` due to degradation at k=runs (evaluates to 1.0 if passed at least once, causing misinterpretations). Separated into "Average Success Rate (pass@1)" and "Tasks with ≥1 Success".
+- **Conservative Usability Assessment** — Removed optimistic most-frequent-tier displays; updated recommendation logic to evaluate difficulty proportions and "avoid labeling as Autonomous if even a single 🔴 Unusable task exists".
+- **Breakdown Notes** — Explicitly noted that quality breakdowns in multi-run executions represent 1 representative trial while Quality represents the average.
 
-- `runs=1` では既存フィールドの値は不変。`results.json` には追加フィールド
-  （`runs` `success_rate` `pass_at_1` `pass_at_k` `attempts` `usability_tier`、
-  `summary.usability` `solved_any_rate` ほか）が**増えます**。
-- `report.md` のタスク別結果に **「判定（ティア）」列**が常時追加され、複数試行時はさらに
-  **「信頼性」列**が増えます。Markdown表を機械パースしている場合は列数の変化に注意。
-- サマリの `pass@k` 行は撤去し、`成功率(pass@1)` と `≥1成功` に変更（⑥）。
+---
+
+## Modified Files
+
+Added: `llmbench/usability.py`, `llmbench/compare.py`, `tasks/t016_temps` to `t020_calc/`
+Modified: `llmbench/{runner,report,scoring,cli}.py`, `llmbench/clients/{openai_compat,ollama}.py`, `config.yaml`
+
+## Validation Results (All PASSED)
+
+- `llmbench validate` … **gold 20/20 resolved, broken 20/20 fail, PASS** (across all 20 tasks).
+- Validity of New Tasks … Confirmed buggy_code fails tests on all tasks, and gold fixes pass all tasks individually.
+- pass@k Standalone … Confirmed backward compatibility (`combined(True,88.6) = 94.3`), unbiased estimator values, and flaky/unusable classifications.
+- Multi-run Execution … Confirmed aggregation and report/JSON output for success rate, pass@k, and usability tiers.
+- compare … Confirmed rankings, relative scores, comparison matrices, and API key environment variable expansion.
+- Model Resolution … Confirmed server detection for `model:auto`, label formatting, dynamic Ollama resolution, and user-friendly error messages when servers are offline.
+- ruff (E, F, W, B, SIM, C4, S) … Zero issues across added and modified files. `compileall` OK.
+
+## Backward Compatibility & Migration Notes
+
+- Under `runs=1`, existing field values remain unchanged. Additional fields are **added** to `results.json` (`runs`, `success_rate`, `pass_at_1`, `pass_at_k`, `attempts`, `usability_tier`, `summary.usability`, `solved_any_rate`, etc.).
+- A **"Usability Tier" column** is now permanently added to task results in `report.md`; multi-run executions will also include a **"Reliability" column**. Take note of column count shifts if programmatic parsing is applied to Markdown tables.
+- The `pass@k` row in summary outputs has been removed and replaced with **Success Rate (pass@1)** and **≥1 Success** (⑥).

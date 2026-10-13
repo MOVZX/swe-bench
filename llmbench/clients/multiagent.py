@@ -1,26 +1,26 @@
-"""multiagent クライアント — CodeRouter 経由で planner→coder→reviewer を回す.
+"""multiagent client — runs planner -> coder -> reviewer loop via CodeRouter.
 
-llmbench/clients/multiagent.py として配置する drop-in クライアント。
-LLMClient を実装し、1 回の `generate(system, user)` の内部で役割分離ループを
-実行して、最終パッチ (--- FILE: path --- 形式) を返す。llmbench 側の採点・
-隠しテスト・pass@k・品質・certify・compare はそのまま再利用される。
+Drop-in client placed as llmbench/clients/multiagent.py.
+Implements LLMClient, executing a role-separated loop inside a single `generate(system, user)`
+call, returning the final patch in `--- FILE: path ---` format. Grading, hidden tests, pass@k,
+quality, certification, and comparison on the llmbench side are reused as-is.
 
-設計 (docs/inside/future.md §5):
-  - 隠しテストはエージェントに渡らない → 内部ゲートは「構文(ast)」のみ。
-    機能テストは llmbench が patch 適用後に隠しテストで判定する。
-  - coder には llmbench の SYSTEM_PROMPT (--- FILE: path --- 全置換形式) を
-    *そのまま* 渡す → single ベースラインと同一指示で公平。
-  - planner: 症状から原因と修正範囲を診断 (複数ファイルでどれを直すか絞る)。
-  - reviewer: 過剰修正/回帰を指摘 → REVISE のときだけ coder が 1 回改稿。
-  - tokens / latency は全役割の合算 → multi の本当のコストが llmbench の
-    tok/s・latency にそのまま乗る (正直な比較)。
+Design (docs/inside/future.md §5):
+  - Hidden tests are not passed to agents → internal gate is purely syntax-based (ast).
+    Functional tests are evaluated by llmbench using hidden tests after patch application.
+  - coder receives llmbench's original SYSTEM_PROMPT (`--- FILE: path ---` full replacement format)
+    *unmodified* → fair and identical instructions as the single-agent baseline.
+  - planner: diagnoses root cause and fix scope from symptoms (isolating which file(s) to modify).
+  - reviewer: checks for over-edits/regressions → coder revises once only on 'REVISE'.
+  - tokens / latency are aggregated across all roles → true multi-agent cost is accurately reflected
+    in llmbench tok/s and latency (honest comparison).
 
-config.yaml の models エントリ例:
+Example config.yaml models entry:
     multiagent:
       type: multiagent
-      base_url: "http://localhost:8088/v1"   # CodeRouter (OpenAI 互換 ingress)
-      reviewer: true            # false で planner+coder のみ
-      max_iters: 2              # 構文エラー時の coder 再生成上限
+      base_url: "http://localhost:8088/v1"   # CodeRouter (OpenAI-compatible ingress)
+      reviewer: true            # false for planner+coder only
+      max_iters: 2              # max regeneration iterations on coder syntax errors
       profiles: {planner: planner, coder: coder, reviewer: reviewer}
 """
 from __future__ import annotations
@@ -58,7 +58,7 @@ _VERDICT_RE = re.compile(r"VERDICT:\s*(PASS|REVISE)", re.IGNORECASE)
 
 
 class MultiAgentClient(LLMClient):
-    """planner→coder→reviewer を CodeRouter 経由で実行する LLMClient."""
+    """LLMClient that executes planner -> coder -> reviewer via CodeRouter."""
 
     def __init__(self, name: str, cfg: dict):
         super().__init__(name, cfg)
@@ -69,7 +69,7 @@ class MultiAgentClient(LLMClient):
         if not base.endswith("/v1"):
             base += "/v1"
         self.endpoint = base + "/chat/completions"
-        self.model = cfg.get("model", "router")  # CodeRouter は profile header で経路決定
+        self.model = cfg.get("model", "router")  # CodeRouter determines routing via profile header
         self.use_reviewer = bool(cfg.get("reviewer", True))
         self.max_iters = int(cfg.get("max_iters", 2))
         p = cfg.get("profiles", {}) or {}
@@ -78,10 +78,10 @@ class MultiAgentClient(LLMClient):
             "coder": p.get("coder", "coder"),
             "reviewer": p.get("reviewer", "reviewer"),
         }
-        # 役割別トークン内訳 (デバッグ/記事用に raw へ載せる)
+        # Role token breakdown (saved to raw for debugging/analysis)
         self._roles: list[dict] = []
 
-    # ---- 1 回の wire 呼び出し --------------------------------------------
+    # ---- Single wire call ------------------------------------------------
     def _call(self, role: str, system: str, user: str) -> tuple[str, int, int]:
         payload = {
             "model": self.model,
@@ -111,7 +111,7 @@ class MultiAgentClient(LLMClient):
         except urllib.error.URLError as e:
             raise RuntimeError(
                 f"[{role}] connection failed to {self.endpoint}: {e.reason}. "
-                "CodeRouter は起動している?"
+                "Is CodeRouter running?"
             ) from e
         content = body["choices"][0]["message"]["content"] or ""
         usage = body.get("usage") or {}
@@ -121,10 +121,10 @@ class MultiAgentClient(LLMClient):
                             "prompt_tokens": pt, "completion_tokens": ct})
         return content, pt, ct
 
-    # ---- 構文ゲート (隠しテストが無いので最低限の機械チェック) ----------
+    # ---- Syntax gate (minimal automated checks since hidden tests are omitted) ----------
     @staticmethod
     def _syntax_error(text: str) -> str | None:
-        """出力中の python コードブロックを ast.parse。最初のエラーを返す。"""
+        """Parses Python code blocks in output via ast.parse. Returns the first error."""
         blocks = _CODE_BLOCK_RE.findall(text)
         for code in blocks:
             try:
@@ -137,17 +137,17 @@ class MultiAgentClient(LLMClient):
     def _has_file_blocks(text: str) -> bool:
         return "FILE:" in text and "```" in text
 
-    # ---- メイン: 役割分離ループ ----------------------------------------
+    # ---- Main: Role-separated loop ----------------------------------------
     def _generate(self, system: str, user: str) -> GenerationResult:
         self._roles = []
         t0 = time.monotonic()
         pt_sum = ct_sum = 0
 
-        # 1) planner — 原因診断 + 最小修正方針
+        # 1) planner — Root cause diagnosis + minimal fix strategy
         plan, pt, ct = self._call("planner", PLANNER_SYS, user)
         pt_sum += pt; ct_sum += ct
 
-        # 2) coder — llmbench の system (FILE 形式) をそのまま使用。構文NGなら再生成。
+        # 2) coder — Uses llmbench's system prompt (FILE format) as-is. Regenerates on syntax errors.
         coder_user_base = (
             f"{user}\n\n# Diagnosis and fix plan\n{plan}\n\n"
             "Apply the fix following the plan. Keep changes minimal."
@@ -165,7 +165,7 @@ class MultiAgentClient(LLMClient):
                 break
             feedback = err
 
-        # 3) reviewer — 過剰修正/回帰チェック → REVISE のときだけ 1 回改稿
+        # 3) reviewer — Check over-edits/regressions -> revise once if REVISE
         if self.use_reviewer:
             rev, pt, ct = self._call(
                 "reviewer", REVIEWER_SYS,
@@ -181,7 +181,7 @@ class MultiAgentClient(LLMClient):
                     + f"\n\n# Reviewer feedback (apply only what is necessary):\n{rev}",
                 )
                 pt_sum += pt; ct_sum += ct
-                # 改稿はパース可能 & 構文OK のときだけ採用 (改悪を防ぐ)
+                # Adopt revision only if parseable & syntax-valid (prevents degradation)
                 if self._has_file_blocks(revised) and self._syntax_error(revised) is None:
                     code_text = revised
 

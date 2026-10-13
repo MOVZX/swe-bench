@@ -1,9 +1,9 @@
-"""知識QA grader (医療など) — 参考値.
+"""Knowledge QA grader (Medical, etc.) — Reference values.
 
-回答をgoldキーと照合する。MCQは選択肢文字、短答はキーワード一致。
-医療ドメインは「参考値 (reference)」であり臨床的妥当性の保証ではない。
+Matches model answers against gold keys. Uses option letters for MCQ, keyword matching for short answers.
+Medical domain outputs are "reference values" and do not guarantee clinical validity.
 
-出力契約: `--- ANSWER ---` の後に回答 (MCQは選択肢文字、短答は用語)。
+Output Contract: Answer text after `--- ANSWER ---` (option letter for MCQ, term for short answer).
 gold.json:
   {"mode": "mcq", "answer": "C"}
   {"mode": "keyword", "all": ["ace inhibitor"], "any": ["acei", "lisinopril"]}
@@ -29,7 +29,7 @@ def _load_gold(task) -> dict:
 
 
 def _mcq_letter(answer: str) -> str | None:
-    """回答から選択肢文字 (A-E) を抽出する."""
+    """Extracts option letter (A-E) from answer."""
     m = re.search(r"answer\s*(?:is|:)?\s*\(?([A-Ea-e])\b", answer, re.I)
     if m:
         return m.group(1).upper()
@@ -100,5 +100,5 @@ class QaGrader(Grader):
     def mock_broken(self, task) -> str:
         gold = _load_gold(task)
         if gold.get("mode") == "mcq":
-            return "--- ANSWER ---\nZ"   # A-E に無い → 不一致
+            return "--- ANSWER ---\nZ"   # Not in A-E -> mismatch
         return "--- ANSWER ---\nzzzzz"

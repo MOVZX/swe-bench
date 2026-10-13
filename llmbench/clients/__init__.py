@@ -1,4 +1,4 @@
-"""LLMクライアント層: OpenAI互換 / Ollama / Mock."""
+"""LLM client layer: OpenAI-compatible / Ollama / Mock."""
 
 from .base import GenerationResult as GenerationResult
 from .base import LLMClient
@@ -9,7 +9,7 @@ from .multiagent import MultiAgentClient
 
 
 def create_client(name: str, cfg: dict) -> LLMClient:
-    """config.yaml の models エントリからクライアントを生成する."""
+    """Creates a client instance from a config.yaml models entry."""
     ctype = cfg.get("type")
     if ctype == "openai":
         return OpenAICompatClient(name, cfg)

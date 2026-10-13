@@ -1,12 +1,12 @@
-"""制約チェック評価器 (IFEval 方式).
+"""Constraint checking evaluator (IFEval style).
 
-constraint grader と judge grader の hard_constraints で共用する。
-各チェックはプログラムで決定的に検証可能。テキスト (モデルの回答) に対して
-チェック配列を実行し、通過/不通過のリストを返す。
+Shared between constraint grader and judge grader hard_constraints.
+Each check is deterministically verifiable via code. Executes check array
+against output text (model's response) and returns list of pass/fail statuses.
 
-カウント規約 (タスク作成者と grader で一致させること):
-  - word_count : len(text.split())            … 空白区切りの語数
-  - line_count : 非空行の数                     … [l for l in splitlines() if l.strip()]
+Counting conventions (must match between task authors and grader):
+  - word_count : len(text.split())            … Space-delimited word count
+  - line_count : non-empty line count          … [l for l in splitlines() if l.strip()]
   - char_count : len(text.strip())
 """
 
@@ -21,9 +21,9 @@ _ANSWER_MARKER_RE = re.compile(r"-{2,}\s*ANSWER\s*-{2,}", re.I)
 
 
 def extract_answer(text: str) -> str:
-    """`--- ANSWER ---` マーカー以降を回答本文として取り出す.
+    """Extracts answer body appearing after `--- ANSWER ---` marker.
 
-    マーカーが無ければ全文を回答とみなす。制御トークン (harmony系) は除去する。
+    Treats entire text as answer if marker is absent. Strips control tokens (harmony-style).
     """
     text = _strip_control_tokens(text or "")
     parts = _ANSWER_MARKER_RE.split(text)
@@ -40,7 +40,7 @@ def _lines(text: str) -> int:
 
 
 def _get_path(obj, path: str):
-    """ドット区切りパスで JSON を辿る (list は数値インデックス)."""
+    """Traverses JSON structure via dot-separated path (list uses numeric indices)."""
     cur = obj
     for part in path.split("."):
         if isinstance(cur, list):
@@ -61,17 +61,17 @@ def _eval_one(text: str, chk: dict) -> tuple[bool, str]:
         n = _words(text)
         lo, hi = chk.get("min"), chk.get("max")
         ok = (lo is None or n >= lo) and (hi is None or n <= hi)
-        return ok, f"{n}語 (min={lo} max={hi})"
+        return ok, f"{n} words (min={lo} max={hi})"
     if kind == "line_count":
         n = _lines(text)
         lo, hi = chk.get("min"), chk.get("max")
         ok = (lo is None or n >= lo) and (hi is None or n <= hi)
-        return ok, f"{n}行 (min={lo} max={hi})"
+        return ok, f"{n} lines (min={lo} max={hi})"
     if kind == "char_count":
         n = len(text.strip())
         lo, hi = chk.get("min"), chk.get("max")
         ok = (lo is None or n >= lo) and (hi is None or n <= hi)
-        return ok, f"{n}字 (min={lo} max={hi})"
+        return ok, f"{n} chars (min={lo} max={hi})"
     if kind == "contains":
         t = chk["text"]
         needle = t.lower() if ci else t
@@ -113,16 +113,16 @@ def _eval_one(text: str, chk: dict) -> tuple[bool, str]:
         if "equals" in chk:
             return val == chk["equals"], f"json_path {chk['path']}={val!r} (==({chk['equals']!r}))"
         return True, f"json_path {chk['path']} exists"
-    return False, f"未知のcheck kind: {kind}"
+    return False, f"Unknown check kind: {kind}"
 
 
 def run_checks(text: str, checks: list[dict]) -> list[dict]:
-    """チェック配列を実行し [{kind, desc, passed, detail}] を返す."""
+    """Executes array of checks and returns [{kind, desc, passed, detail}]."""
     out = []
     for chk in checks:
         try:
             ok, detail = _eval_one(text, chk)
-        except Exception as e:  # チェック定義不備は不通過扱い (全体は落とさない)
+        except Exception as e:  # Invalid check definitions treated as failed check (avoids crashing process)
             ok, detail = False, f"check error: {e}"
         out.append({
             "kind": chk.get("kind"),

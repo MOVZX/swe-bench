@@ -1,4 +1,4 @@
-"""_ledgers() の台帳選択ロジックの単体テスト (ネットワーク不要)."""
+"""Unit tests for _ledgers() ledger selection logic (no network required)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from llmbench.cli import _ledgers
 
 
 def _args(**kw):
-    """SimpleNamespace で args を模擬。only_*/with_* は既定 False。"""
+    """Simulates args using SimpleNamespace. only_*/with_* default to False."""
     base = {
         "only_l6": False,
         "only_l7": False,
@@ -60,12 +60,12 @@ def test_ledgers_only_l6_with_l7():
 
 
 def test_ledgers_only_l6_with_l6_no_dup():
-    # --only-l6 と --with-l6 は同義。二重追加しない。
+    # --only-l6 and --with-l6 are equivalent. Prevent duplicate entries.
     assert _ledgers(_args(only_l6=True, with_l6=True)) == ["tasks_l6.jsonl"]
 
 
 def test_ledgers_custom_ledger_name():
-    # 台帳名を変更したら選択結果に反映される。
+    # Custom ledger file names should be reflected in selection output.
     args = _args(with_l6=True, with_l7=True,
                  l6_ledger="custom_l6.jsonl", l7_ledger="custom_l7.jsonl")
     assert _ledgers(args) == [

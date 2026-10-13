@@ -1,11 +1,11 @@
-"""制約遵守 grader (一般タスク / IFEval 方式).
+"""Constraint-following grader (General tasks / IFEval style).
 
-モデルの回答をプログラムで検証可能なチェック配列 (checks.json) で採点する。
-judge 不要の完全客観。コーダー特化モデルの「一般退化」が可視化される。
+Evaluates model responses against programmatically verifiable arrays of checks (checks.json).
+Fully objective evaluation without needing a LLM judge. Exposes "general instruction degradation" in coding-specialized models.
 
-出力契約: `--- ANSWER ---` の後に回答本文 (無ければ全文を回答とみなす)。
-- resolved = 全チェック通過 (instruction-strict accuracy)
-- quality  = 通過数 / 総数 × 100 (instruction-level accuracy)
+Output Contract: Main response text after `--- ANSWER ---` (entire text treated as answer if marker absent).
+- resolved = All checks passed (instruction-strict accuracy)
+- quality  = Passed count / Total count × 100 (instruction-level accuracy)
 """
 
 from __future__ import annotations
@@ -69,4 +69,4 @@ class ConstraintGrader(Grader):
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
     def mock_broken(self, task) -> str:
-        return "x"  # 1語・非JSON・マーカー無し → ほぼ全チェックを落とす
+        return "x"  # 1 word, non-JSON, missing marker -> fails practically all checks

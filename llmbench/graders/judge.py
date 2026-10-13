@@ -1,11 +1,11 @@
-"""文章品質 grader (創作 / rubric + judge) — 実験的.
+"""Text quality grader (Creative Writing / rubric + judge) — experimental.
 
-オラクルが無いため rubric + judge モデルに依存する (未較正・experimental)。
-まず hard_constraints を決定的ゲートとして評価し、judge クライアントがあれば
-rubric で 0-10 採点する。judge が無い場合 (validate/mock 含む) は hard_constraints
-のみで判定するため、検証は決定的に緑を保てる。
+Since there is no oracle, relies on a rubric + judge model (uncalibrated/experimental).
+First evaluates hard_constraints as a deterministic gate; if a judge client is provided,
+scores 0-10 based on the rubric. When no judge is present (including during validate/mock),
+evaluates using only hard_constraints, keeping validation deterministically green.
 
-出力契約: `--- ANSWER ---` の後に文章本文。
+Output Contract: Main response text after `--- ANSWER ---`.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ class JudgeGrader(Grader):
             "hard_pass": hard_pass, "hard_checks": hard,
         }
 
-        # judge 無し or hard 不合格 → 決定的判定
+        # No judge or hard constraints failed → deterministic evaluation
         if ctx.judge is None or not hard_pass:
             ev.resolved = hard_pass
             ev.quality_score = 100.0 if hard_pass else 0.0
@@ -96,7 +96,7 @@ class JudgeGrader(Grader):
                 ev.fail_reason = f"hard constraints failed: {hard_failed}"
             return ev
 
-        # judge あり → seeds 回採点して平均
+        # Judge present → score across seeds and average
         seeds = max(1, int(ctx.judge_seeds))
         prompt = _judge_prompt(task, rubric, answer, ctx.lang)
         scores = []
@@ -109,7 +109,7 @@ class JudgeGrader(Grader):
             except Exception as e:
                 comp.setdefault("errors", []).append(str(e))
         if not scores:
-            # judge 応答不良 → hard ゲートのみで妥協
+            # Judge response error → fall back to hard gate only
             ev.resolved = hard_pass
             ev.quality_score = 100.0 if hard_pass else 0.0
             comp["note"] = "judge produced no parseable score; fell back to hard gate"

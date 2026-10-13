@@ -1,15 +1,16 @@
-"""tier合格制による「使えるライン」判定.
+"""Usability tier classification based on passing criteria.
 
-results.json (runner出力) を読み、難易度を tier(L1-L7) にマップして、
-tierごとの平均成功率・平均combinedが gate を満たすかを **累積** で評価する。
-モデルの到達レベル (= gateを満たした最上位tier) を返す。
+Reads results.json (runner output), maps task difficulties to tiers (L1-L7),
+and cumulatively evaluates whether the average success rate and average combined
+score for each tier satisfy the required gate criteria.
+Returns the model's achieved level (= highest tier satisfying the gate).
 
-- L4 (expert) gate = **使えるライン**: 監督付きで実務投入できる。
-- 単体スクリプトとしても動く (stdlib のみ。llmbench本体に非依存):
+- L4 (expert) gate = **Usability Baseline**: Usable in production under supervision.
+- Can run as a standalone script (stdlib only; independent of llmbench core):
     python3 certify.py results/<stamp>_<model>_results.json
-    python3 certify.py --merge base40.json l6.json   # 分割実行を合算して1認証
-- llmbench に組み込む場合は llmbench/certify.py として配置し、
-  report.py / compare.py から `certify()` / `render_certificate_md()` を呼ぶ。
+    python3 certify.py --merge base40.json l6.json   # Merge split executions into 1 certificate
+- For integration into llmbench, place as llmbench/certify.py and call
+  `certify()` / `render_certificate_md()` from report.py / compare.py.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-# 難易度 -> tier。既存の easy/medium/hard と新規 expert/frontier/architect/grandmaster を対応づける。
+# Difficulty -> tier mapping. Maps existing easy/medium/hard and new expert/frontier/architect/grandmaster.
 DIFFICULTY_TO_TIER = {
     "easy": "L1",
     "medium": "L2",
@@ -35,37 +36,37 @@ TIER_LABEL = {
     "L1": "L1 easy",
     "L2": "L2 medium",
     "L3": "L3 hard",
-    "L4": "L4 expert (使えるライン)",
+    "L4": "L4 expert (Usability Baseline)",
     "L5": "L5 frontier",
     "L6": "L6 architect",
-    "L7": "L7 grandmaster (天井評価)",
+    "L7": "L7 grandmaster (Ceiling Evaluation)",
 }
 
-# gate: そのtierのタスク平均が満たすべき下限。
-# min_success は pass@1 平均 (success_rate)、min_combined は combined 平均。
+# Gate: Minimum threshold to be met by average task scores in each tier.
+# min_success is average pass@1 (success_rate), min_combined is average combined score.
 DEFAULT_GATES = {
     "L1": {"min_success": 0.90, "min_combined": 0.0},
     "L2": {"min_success": 0.85, "min_combined": 0.0},
     "L3": {"min_success": 0.75, "min_combined": 60.0},
     "L4": {"min_success": 0.60, "min_combined": 55.0},
     "L5": {"min_success": 0.40, "min_combined": 0.0},
-    # L6 (architect): Phase 3 較正で確定 (ornith 9B/35B ×5run, 2026-06-26)。
+    # L6 (architect): Finalized via Phase 3 calibration (ornith 9B/35B ×5 runs, 2026-06-26).
     "L6": {"min_success": 0.60, "min_combined": 58.0},
-    # L7 (grandmaster): 暫定値。天井評価用 (t061-t100)。
-    # 実モデル較正 (フロンティア級モデル ×5run 想定) で確定するまでの仮ゲート。
+    # L7 (grandmaster): Provisional value for ceiling evaluation (t061-t100).
+    # Temporary gate until finalized via empirical calibration (assumes frontier models ×5 runs).
     "L7": {"min_success": 0.35, "min_combined": 55.0},
 }
 
-# 到達レベルの解釈 (レポート用の一言)。
+# Level verdict interpretations (short summary for reports).
 LEVEL_VERDICT = {
-    None: "L1未達。基本的なバグ修正も安定せず、実務利用は不可。",
-    "L1": "おもちゃ級は確実だが、実務の単純バグはまだ不安定。",
-    "L2": "仕様準拠の単純作業は任せられる。",
-    "L3": "実務の単純〜中級バグは任せられる。",
-    "L4": "✅ 使えるライン到達。監督付きで実務投入できる。",
-    "L5": "フロンティア級。複雑案件も補助付きで任せられる。",
-    "L6": "アーキテクト級。リポジトリ規模の診断・設計判断まで任せられる。",
-    "L7": "グランドマスター級。天井評価帯まで到達 — 現行タスク群では頭打ちが見えない水準。",
+    None: "Below L1. Basic bug fixes remain unstable; unusable in production.",
+    "L1": "Reliable for toy-level tasks, but simple production bugs are still unstable.",
+    "L2": "Capable of handling simple tasks following clear specifications.",
+    "L3": "Capable of handling simple-to-intermediate production bugs.",
+    "L4": "✅ Usability baseline reached. Ready for production under supervision.",
+    "L5": "Frontier level. Can handle complex tasks with assistance.",
+    "L6": "Architect level. Capable of repository-scale diagnostics and design decisions.",
+    "L7": "Grandmaster level. Reached ceiling evaluation band — no plateau observed with current task suite.",
 }
 
 
@@ -74,14 +75,14 @@ def _mean(xs: list[float]) -> float:
 
 
 def _task_success(t: dict) -> float:
-    """success_rate を取得。runs=1 の旧形式なら resolved を 0/1 に。"""
+    """Gets success_rate. For older formats (runs=1), maps resolved boolean to 0.0/1.0."""
     if "success_rate" in t and t["success_rate"] is not None:
         return float(t["success_rate"])
     return 1.0 if t.get("resolved") else 0.0
 
 
 def aggregate_by_tier(results: list[dict]) -> dict[str, dict]:
-    """tierごとに success_rate / combined の平均と件数を集計する。"""
+    """Aggregates mean success_rate, mean combined score, and task count per tier."""
     buckets: dict[str, dict[str, list]] = {}
     for t in results:
         tier = DIFFICULTY_TO_TIER.get(t.get("difficulty"))
@@ -103,19 +104,19 @@ def aggregate_by_tier(results: list[dict]) -> dict[str, dict]:
 
 
 def certify(results: list[dict], gates: dict | None = None) -> dict:
-    """tier集計 -> gate判定 -> 到達レベル.
+    """Tier aggregation -> gate evaluation -> achieved level.
 
-    戻り値: {achieved_level, verdict, tiers:[{tier,n,mean_success,
-    mean_combined,gate_pass,measured}], gates}
-    achieved_level は「測定済みかつ下位を含め連続して gate を満たした最上位tier」。
-    タスクが無い (未測定) tier は判定をスキップし、合否のブロックもしない。
+    Returns: {achieved_level, verdict, usable_line, independent_pass,
+    tiers:[{tier,n,mean_success,mean_combined,gate_pass,measured}], gates}
+    achieved_level is 'the highest tier that was measured and continuously passed gates including lower tiers'.
+    Unmeasured tiers skip evaluation without blocking overall pass/fail status.
     """
     gates = gates or DEFAULT_GATES
     agg = aggregate_by_tier(results)
 
     rows = []
     achieved = None
-    broken = False  # 一度 gate を落としたらそれ以上は認証しない
+    broken = False  # Once a gate fails, stop certifying higher tiers cumulatively
     for tier in TIER_ORDER:
         g = gates[tier]
         if tier not in agg:
@@ -145,17 +146,17 @@ def certify(results: list[dict], gates: dict | None = None) -> dict:
             else:
                 broken = True
 
-    # 非累積判定: 各tierを独立に評価する (下位tierの取りこぼしでブロックしない)。
+    # Non-cumulative evaluation: evaluates each tier independently (not blocked by failures in lower tiers).
     measured = [r for r in rows if r["measured"]]
     independent_pass = [r["tier"] for r in measured if r["gate_pass"]]
     l4 = next((r for r in rows if r["tier"] == "L4"), None)
     usable_line = bool(l4 and l4["measured"] and l4["gate_pass"])
 
     return {
-        "achieved_level": achieved,          # 累積 (下位から連続合格した最上位)
+        "achieved_level": achieved,          # Cumulative (highest level passed sequentially from bottom)
         "verdict": LEVEL_VERDICT.get(achieved, ""),
-        "usable_line": usable_line,          # 主判定: L4を独立に合格したか
-        "independent_pass": independent_pass,  # 独立に合格した全tier
+        "usable_line": usable_line,          # Primary evaluation: Passed L4 independently
+        "independent_pass": independent_pass,  # All tiers passed independently
         "tiers": rows,
         "gates": gates,
     }
@@ -163,56 +164,56 @@ def certify(results: list[dict], gates: dict | None = None) -> dict:
 
 def render_certificate_md(cert: dict, model: str = "") -> str:
     lines = []
-    head = f"## 🎓 認証 (使えるライン判定){f': {model}' if model else ''}"
+    head = f"## 🎓 Certificate (Usability Baseline Evaluation){f': {model}' if model else ''}"
     lines.append(head)
 
-    # 主判定: 使えるライン = L4 を独立に合格したか (非累積)。
+    # Primary verdict: Usability baseline = Passed L4 independently (non-cumulative).
     usable = cert.get("usable_line")
-    usable_txt = "✅ 使えるライン到達" if usable else "❌ 使えるライン未到達"
-    lines.append(f"\n**{usable_txt}** (L4 expert を独立に合格){'' if usable else ''}")
+    usable_txt = "✅ Usability Baseline Reached" if usable else "❌ Usability Baseline Not Reached"
+    lines.append(f"\n**{usable_txt}** (Independently passed L4 expert){'' if usable else ''}")
 
-    # 副判定: 累積到達レベル (下位tierも連続合格＝一貫性の指標)。
+    # Secondary verdict: Cumulative achieved level (consecutive passes including lower tiers = consistency metric).
     lvl = cert["achieved_level"]
-    lvl_txt = TIER_LABEL.get(lvl, "なし (L1未達)")
+    lvl_txt = TIER_LABEL.get(lvl, "None (Below L1)")
     indep = cert.get("independent_pass", [])
     lines.append(
-        f"参考: 累積到達レベル **{lvl_txt}** / 独立合格tier: "
-        f"{', '.join(indep) if indep else 'なし'}\n"
+        f"Reference: Cumulative Achieved Level **{lvl_txt}** / Independently Passed Tiers: "
+        f"{', '.join(indep) if indep else 'None'}\n"
     )
 
-    lines.append("| Tier | 独立判定 | タスク数 | 平均成功率 | 平均combined | gate(成功率/combined) |")
+    lines.append("| Tier | Independent Pass | Tasks | Avg Success | Avg Combined | Gate (Success/Combined) |")
     lines.append("|---|---|---|---|---|---|")
     for r in cert["tiers"]:
         g = r["gate"]
         gate_s = f"≥{g['min_success']:.0%} / ≥{g['min_combined']:.0f}"
         if not r["measured"]:
-            lines.append(f"| {r['tier']} | — 未測定 | 0 | – | – | {gate_s} |")
+            lines.append(f"| {r['tier']} | — Unmeasured | 0 | – | – | {gate_s} |")
             continue
-        mark = "✅合格" if r["gate_pass"] else "❌不合格"
+        mark = "✅ Pass" if r["gate_pass"] else "❌ Fail"
         lines.append(
             f"| {r['tier']} | {mark} | {r['n']} | "
             f"{r['mean_success']:.0%} | {r['mean_combined']:.1f} | {gate_s} |"
         )
     lines.append(
-        "\n> **使えるライン = L4 を独立に合格** (下位tierの取りこぼしに左右されない)。"
-        " 累積到達レベルは『下位から連続して合格した最上位』で、一貫性の参考指標。"
-        " L7(grandmaster)は天井評価帯 — gateは暫定値であり、実モデル較正で確定する。"
+        "\n> **Usability Baseline = Passed L4 independently** (unaffected by misses in lower tiers)."
+        " Cumulative achieved level indicates 'the highest tier passed sequentially from L1', serving as a consistency reference."
+        " L7 (grandmaster) is the ceiling evaluation tier — gates are provisional and will be finalized after empirical calibration."
     )
     return "\n".join(lines)
 
 
-# ===== ドメイン別認証 (コーディング以外) =====
+# ===== Domain-specific Certification (Non-coding) =====
 
 DOMAIN_ORDER = ["security", "general", "writing", "medical"]
 
 DOMAIN_LABEL = {
-    "security": "🛡️ security 検出/解析",
-    "general": "📋 general 指示追従",
-    "writing": "✍️ writing 創作",
+    "security": "🛡️ security Detection/Analysis",
+    "general": "📋 general Instruction Following",
+    "writing": "✍️ writing Creative Writing",
     "medical": "🩺 medical QA",
 }
 
-# ドメイン別ゲート (暫定。experimental/reference はバランス指数から除外)。
+# Domain-specific gates (Provisional. Experimental/reference categories excluded from balance index).
 DEFAULT_DOMAIN_GATES = {
     "security": {"min_success": 0.60, "min_combined": 60.0},
     "general": {"min_success": 0.70, "min_combined": 65.0},
@@ -222,7 +223,7 @@ DEFAULT_DOMAIN_GATES = {
 
 
 def aggregate_by_domain(results: list[dict]) -> dict[str, dict]:
-    """domain ごとに success_rate / combined を集計 (code は除外)."""
+    """Aggregates success_rate / combined score by domain (excludes 'code')."""
     buckets: dict[str, dict[str, list]] = {}
     for t in results:
         dom = t.get("domain", "code")
@@ -246,10 +247,10 @@ def _coding_combined(results: list[dict]) -> tuple[float, int]:
 
 
 def certify_domains(results: list[dict], gates: dict | None = None) -> dict:
-    """ドメイン別ゲート判定 + バランス指数.
+    """Domain-specific gate evaluation + Balance Index.
 
-    バランス指数 = coding + 非experimentalドメインの平均combined(0-1)の調和平均×100。
-    一芸特化(あるドメインだけ低い)モデルほど大きく下がる。
+    Balance Index = Harmonic mean of combined scores (0-1) across coding + non-experimental domains × 100.
+    Drops significantly for specialized/one-trick models (models weak in specific domains).
     """
     gates = gates or DEFAULT_DOMAIN_GATES
     agg = aggregate_by_domain(results)
@@ -269,7 +270,7 @@ def certify_domains(results: list[dict], gates: dict | None = None) -> dict:
             "gate_pass": passed, "gate": g,
             "experimental": bool(g.get("experimental") or g.get("reference")),
         })
-    # バランス指数 (coding + 非experimentalドメイン)
+    # Balance Index (coding + non-experimental domains)
     members: list[tuple[str, float]] = []
     cc, cn = _coding_combined(results)
     if cn:
@@ -290,13 +291,13 @@ def certify_domains(results: list[dict], gates: dict | None = None) -> dict:
 def render_domains_md(cd: dict) -> str:
     if not cd["domains"]:
         return ""
-    lines = ["## 🌐 ドメイン別認証 (コーディング以外)", ""]
-    lines.append("| Domain | タスク数 | 平均成功率 | 平均combined | gate(成功率/combined) | 判定 |")
+    lines = ["## 🌐 Domain Certification (Non-coding)", ""]
+    lines.append("| Domain | Tasks | Avg Success | Avg Combined | Gate (Success/Combined) | Status |")
     lines.append("|---|---|---|---|---|---|")
     for r in cd["domains"]:
         g = r["gate"]
         gate_s = f"≥{g.get('min_success', 0):.0%} / ≥{g.get('min_combined', 0):.0f}"
-        mark = "✅合格" if r["gate_pass"] else "❌不合格"
+        mark = "✅ Pass" if r["gate_pass"] else "❌ Fail"
         tag = " *(experimental)*" if r["experimental"] else ""
         lines.append(
             f"| {DOMAIN_LABEL.get(r['domain'], r['domain'])}{tag} | {r['n']} | "
@@ -305,28 +306,28 @@ def render_domains_md(cd: dict) -> str:
     if cd["balance_index"] is not None:
         lines += [
             "",
-            f"**⚖️ バランス指数: {cd['balance_index']:.1f} / 100** "
-            f"（{' + '.join(cd['balance_members'])} の調和平均。"
-            f"一芸特化＝あるドメインだけ低いと大きく下がる）",
-            "> writing/medical は experimental/参考値のため、既定でバランス指数から除外。",
+            f"**⚖️ Balance Index: {cd['balance_index']:.1f} / 100** "
+            f"(Harmonic mean of {' + '.join(cd['balance_members'])}. "
+            f"Decreases sharply if model is specialized/weak in any domain)",
+            "> writing/medical are experimental/reference values and excluded from Balance Index by default.",
         ]
     return "\n".join(lines)
 
 
-# ===== 医療QA 詳細 (難易度別 正答率・参考値) =====
+# ===== Medical QA Details (Accuracy by Difficulty, Reference Values) =====
 
 MED_TIER_ORDER = ["med_basic", "med_std", "med_hard"]
 MED_TIER_LABEL = {
-    "med_basic": "MED-basic 基礎",
-    "med_std": "MED-std 標準(board)",
-    "med_hard": "MED-hard 専門",
+    "med_basic": "MED-basic Basic",
+    "med_std": "MED-std Standard (Board)",
+    "med_hard": "MED-hard Advanced",
 }
-# 参考ゲート (未較正)。accuracy = 平均 success_rate。
+# Reference gates (Uncalibrated). accuracy = mean success_rate.
 DEFAULT_MED_GATES = {"med_basic": 0.80, "med_std": 0.60, "med_hard": 0.40}
 
 
 def certify_medical(results: list[dict]) -> dict:
-    """medical ドメインを難易度(med_basic/std/hard)別に正答率集計する."""
+    """Aggregates accuracy for medical domain grouped by difficulty (med_basic/std/hard)."""
     buckets: dict[str, list] = {}
     for t in results:
         if t.get("domain") != "medical":
@@ -349,12 +350,12 @@ def certify_medical(results: list[dict]) -> dict:
 def render_medical_md(cm: dict) -> str:
     if not cm["tiers"]:
         return ""
-    lines = ["## 🩺 medical QA 詳細 (参考値・未較正)", ""]
-    lines.append(f"**総合正答率: {cm['accuracy'] * 100:.1f}%（{cm['n']}問）**")
+    lines = ["## 🩺 Medical QA Details (Reference Values / Uncalibrated)", ""]
+    lines.append(f"**Overall Accuracy: {cm['accuracy'] * 100:.1f}% ({cm['n']} questions)**")
     lines.append(
-        "> 5択MCQのチャンス正答率は約20%。これは参考値であり臨床的妥当性の保証ではない。"
+        "> Chance accuracy for 5-choice MCQ is approx 20%. These are reference values and do not guarantee clinical validity."
     )
-    lines += ["", "| 難易度 | 問題数 | 正答率 | 参考gate |", "|---|---|---|---|"]
+    lines += ["", "| Difficulty | Questions | Accuracy | Reference Gate |", "|---|---|---|---|"]
     for r in cm["tiers"]:
         mark = "✅" if r["pass"] else "⚠️"
         lines.append(
@@ -370,13 +371,13 @@ def _load_results(path: Path) -> tuple[str, list[dict]]:
 
 
 def merge_results(paths: list) -> tuple[str, list[dict]]:
-    """複数 results.json の results 配列を1つに合算する.
+    """Merges the results arrays across multiple results.json files into one.
 
-    - task_id 重複時は **後勝ち** (後に指定したファイルのレコードで上書き)。
-      分割実行で同一タスクを再測定した場合、新しい方を優先する意図。
-    - task_id を持たないレコードは dedup せずそのまま残す (順序保持)。
-    - モデル名は各ファイルの model を出現順で distinct 収集し " + " 連結。
-    戻り値: (model_label, merged_results)。
+    - On task_id collisions, **last wins** (overwritten by records from later files).
+      Intended to prioritize newer measurements when re-evaluating tasks in split runs.
+    - Records lacking task_id remain un-deduplicated (order preserved).
+    - Model names collect distinct models in appearance order and join via " + ".
+    Returns: (model_label, merged_results).
     """
     merged: dict[str, dict] = {}
     extras: list[dict] = []
@@ -399,11 +400,11 @@ def main(argv: list[str]) -> int:
 
     ap = argparse.ArgumentParser(
         prog="certify.py",
-        description="results.json を tier合格制で判定する (llmbench非依存)",
+        description="Evaluates results.json against tier passing criteria (llmbench independent)",
     )
-    ap.add_argument("results", nargs="+", help="判定する results.json 群")
+    ap.add_argument("results", nargs="+", help="results.json files to evaluate")
     ap.add_argument("--merge", action="store_true",
-                    help="複数ファイルの results を合算して1つの認証を出す")
+                    help="Combine results across multiple files into a single certificate")
     ns = ap.parse_args(argv)
 
     if ns.merge:

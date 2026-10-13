@@ -1,66 +1,44 @@
-# llmbench 設定ファイル
-# モデル定義・スコア重み・実行パラメータをここで一元管理する
+# llmbench configuration file
+# Model definitions, score weights, and execution parameters are centrally managed here.
 
 models:
-  # OpenAI互換API (llama.cpp server / LM Studio / vLLM / text-generation-webui)
-  local-openai:
+  "Hinata - Swift 1.5 Qwen 3.8 Flash Next":
     type: openai
-    base_url: "http://localhost:8085/v1"
-    model: "auto"   # auto = サーバ(/v1/models)のロード中モデルを自動採用。ggufを差し替えてもconfig編集不要
-    api_key: "sk-local"                    # ローカルはダミーでOK
-    temperature: 0.2
-    # Gemma 4 等の thinking(推論)モデル対策で 4096 → 24576 に引き上げ。
-    #   推論モデルは <think> 分の reasoning トークンで出力予算を食う。4096 だと
-    #   難タスク(expert/frontier/architect)で推論だけで上限に達し、パッチ(content)を
-    #   出す前に生成停止 → content 空 → "empty output / patch parse failed" になる。
-    #   llama-server は -c 32768 で起動しているので 24576 でも余裕(prompt は小さい)。
-    #   非推論モデル(qwen2.5-coder 等)なら 4096 のままで良い。
-    max_tokens: 24576
-    timeout: 600
+    base_url: "http://10.4.11.130:8080/v1"
+    api_key: "SKS-id@123"
+    model: "Hinata"
+    temperature: 1.0
+    max_tokens: 131072
+    timeout: 3600
 
-  # Ollama
-  local-ollama:
-    type: ollama
-    base_url: "http://localhost:11434"
-    model: "qwen2.5-coder:32b"
-    temperature: 0.2
-    max_tokens: 4096
-    timeout: 600
-
-  # ── Alibaba Cloud (Model Studio) Qwen 有料プラン (token-plan) ──
-
-  qwen-coding:
+  "Scarlet - Swift 1.5 Qwen 3.8 Flash Next":
     type: openai
-    base_url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
-    model: "qwen3.7-max"   # 非思考コーダー(推奨)。qwen3.7-max等の思考モデルはstream必須でllmbench非対応
-    api_key: "${DASHSCOPE_CODING_API_KEY}" 
-    temperature: 0.2
-    max_tokens: 24576                # reasoning出力に備え大きめ
-    timeout: 600
-    transient_retries: 0
+    base_url: "http://10.4.11.111:8080/v1"
+    api_key: "SKS-id@123"
+    model: "Scarlet"
+    temperature: 1.0
+    max_tokens: 131072
+    timeout: 3600
 
-  # ── z.ai GLM Coding Plan ────────────────────────────────────────
-  glm-coding:
+  "Yuuki - Swift 1.5 Qwen 3.8 27B":
     type: openai
-    base_url: "https://api.z.ai/api/coding/paas/v4"   # Coding Plan専用のOpenAI互換パス
-    model: "glm-4.7"                 # 代替: glm-4.7
-    api_key: "${ZAI_API_KEY}"
-    temperature: 0.2
-    max_tokens: 24576
-    timeout: 600
+    base_url: "http://10.4.11.180:8080/v1"
+    api_key: "SKS-id@123"
+    model: "Yuuki"
+    temperature: 1.0
+    max_tokens: 131072
+    timeout: 3600
 
-  # 参照モデル (compareのアンカー用)。APIキーは環境変数で渡すこと。
-  # 使い方: export OPENAI_API_KEY=sk-... して `llmbench run --model ref-gpt`
-  ref-gpt:
+  "Emma - Qwen 3.6 35B-A3B":
     type: openai
-    base_url: "https://api.openai.com/v1"
-    model: "gpt-4o"
-    api_key: "${OPENAI_API_KEY}"        # ${VAR} は環境変数から展開される
-    temperature: 0.2
-    max_tokens: 4096
-    timeout: 600
+    base_url: "http://10.4.11.133:8080/v1"
+    api_key: "SKS-id@123"
+    model: "Emma"
+    temperature: 1.0
+    max_tokens: 131072
+    timeout: 3600
 
-  # 検証用モック (gold patchをそのまま返す / 壊れた出力を返す)
+  # Mock for verification (returns gold patch as-is / returns broken output)
   mock-gold:
     type: mock
     mode: gold
@@ -69,26 +47,26 @@ models:
     mode: broken
 
 run:
-  issue_lang: en          # en | ja  (language tax検証はjaに切替えて再実行)
-  test_timeout: 120       # pytest実行のタイムアウト(秒/タスク)
-  generate_retries: 1     # パース失敗時の再生成回数
-  workdir: null           # 一時作業ディレクトリ (null = システムtemp配下)
-  runs: 1                 # 各タスクの試行回数 (>1 で pass@k・成功率を計測)
-  sample_temp: 0.8        # 複数試行(runs>1)時のサンプリング温度
-  concurrency: 1          # 試行(runs)の同時実行数。llama.cpp を --parallel N -cb で起動時に >1 で総時間短縮(既定1=直列)
-  # ollama_host: "http://localhost:11434"  # Ollama接続先 (config未定義モデルの自動解決に使用)
+  issue_lang: en          # en | ja  (switch to ja and rerun to verify language tax)
+  test_timeout: 1800       # pytest execution timeout (seconds/task)
+  generate_retries: 1     # number of regeneration attempts on parse failure
+  workdir: null           # temporary working directory (null = under system temp)
+  runs: 1                 # number of trials per task (>1 measures pass@k and success rate)
+  sample_temp: 1.0        # sampling temperature during multiple trials (runs>1)
+  concurrency: 1          # number of concurrent trials (runs). >1 reduces total time when launching llama.cpp with --parallel N -cb (default 1=sequential)
+  # ollama_host: "http://localhost:11434"  # Ollama connection target (used for auto-resolution of models undefined in config)
 
 quality:
   ruff:
     enabled: true
     weight: 0.4
-    # スコア = max(0, 100 - penalty_per_issue * issues密度(100行あたり))
+    # score = max(0, 100 - penalty_per_issue * issue density(per 100 lines))
     penalty_per_issue: 8
   complexity:
     enabled: true
     weight: 0.3
-    # radon Maintainability Index (0-100) をベースに、CCランクで減点
-    cc_penalty:           # 関数の最悪CCランクごとの減点
+    # based on radon Maintainability Index (0-100), penalized by CC rank
+    cc_penalty:           # penalty for function's worst CC rank
       A: 0
       B: 5
       C: 15
@@ -96,41 +74,41 @@ quality:
       E: 45
       F: 60
   llm_review:
-    enabled: false        # レビュー用モデルを起動しているときに true
+    enabled: false        # true when reviewer model is running
     weight: 0.3
-    reviewer_model: local-openai   # models: のキーを指定
+    reviewer_model: local-openai   # specify key from models:
   sonarqube:
-    enabled: false        # SonarQubeサーバ稼働時のみ true
-    weight: 0.0           # 有効化時に重みを再配分すること
+    enabled: false        # true only when SonarQube server is active
+    weight: 0.0           # reallocate weight when enabling
     host_url: "http://localhost:9000"
     token: ""
-  judge:                  # judge grader (創作/writing) の採点モデル
-    enabled: false        # 別系統の judge を起動しているとき true (self-preference回避に judge≠候補)
+  judge:                  # scoring model for judge grader (creative/writing)
+    enabled: false        # true when running a separate judge system (judge != candidate to avoid self-preference)
     judge_model: local-openai
-    seeds: 1              # 1問を何回採点して平均するか (>1 で judge一致率を計測)
+    seeds: 1              # number of times to score a question to average (>1 measures judge consistency rate)
 
 scoring:
   # combined = success_rate * (floor + (1 - floor) * quality / 100)
-  # 動かないコードは0点。動くコードは品質で floor*100 〜 100 点に分布
-  # (runs>1 では resolved の代わりに success_rate でスケールする)
+  # Non-working code gets 0 points. Working code distributes from floor*100 to 100 points based on quality
+  # (When runs>1, scales by success_rate instead of resolved)
   quality_floor: 0.5
 
 usability:
-  # success_rate と quality からタスクを「自律 / 補助 / 不可」に分類する。
-  # runs=1 のとき success_rate は 0/1 (= resolved)。
-  autonomous: {min_success: 0.9, min_quality: 80}   # レビューほぼ不要で任せられる
-  assisted:   {min_success: 0.6, min_quality: 0}    # レビュー前提なら使える
-  # 上記いずれにも満たないものは unusable (不可)
+  # Classifies tasks as "autonomous / assisted / unusable" based on success_rate and quality.
+  # When runs=1, success_rate is 0/1 (= resolved).
+  autonomous: {min_success: 0.9, min_quality: 80}   # Can be entrusted almost without review
+  assisted:   {min_success: 0.6, min_quality: 0}    # Usable under the assumption of review
+  # Anything not meeting the above criteria is unusable
 
 graders:
-  # コーディング以外のドメイン採点器のしきい値 (DESIGN_DOMAINS.md 参照)
-  detection: {pass_f1: 0.67}     # 検出: F1 がこの値以上で resolved
-  constraint: {pass_ratio: 1.0}  # 指示追従: 全チェック通過で resolved (instruction-strict)
-  judge: {pass_score: 7.0}       # 創作: judge 平均スコア(0-10)がこの値以上で resolved
+  # Thresholds for non-coding domain graders (see DESIGN_DOMAINS.md)
+  detection: {pass_f1: 0.67}     # Detection: resolved if F1 is greater than or equal to this value
+  constraint: {pass_ratio: 1.0}  # Instruction following: resolved if all checks pass (instruction-strict)
+  judge: {pass_score: 7.0}       # Creative: resolved if average judge score (0-10) is greater than or equal to this value
 
 certify_domains:
-  # ドメイン別「使えるライン」ゲート (暫定。実モデル較正で確定)。
+  # Domain-specific "usable line" gates (provisional. Finalized by real model calibration).
   security: {min_success: 0.6, min_combined: 60}
   general:  {min_success: 0.7, min_combined: 65}
-  writing:  {min_success: 0.5, min_combined: 55, experimental: true}   # 未較正
-  medical:  {min_success: 0.6, min_combined: 60, reference: true}      # 参考値
+  writing:  {min_success: 0.5, min_combined: 55, experimental: true}   # uncalibrated
+  medical:  {min_success: 0.6, min_combined: 60, reference: true}      # reference value

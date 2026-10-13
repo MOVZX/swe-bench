@@ -1,7 +1,7 @@
-"""SonarQube連携 (任意・v1は最小実装).
+"""SonarQube integration (Optional / minimal v1 implementation).
 
-SonarQubeサーバ + sonar-scanner CLI が必要。enabled: false が既定。
-スコア = 100 - (BLOCKER*20 + CRITICAL*10 + MAJOR*5 + MINOR*2 + INFO*0.5)
+Requires a SonarQube server + sonar-scanner CLI. Defaults to enabled: false.
+score = 100 - (BLOCKER*20 + CRITICAL*10 + MAJOR*5 + MINOR*2 + INFO*0.5)
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def sonar_score(workspace: Path, cfg: dict) -> tuple[float | None, dict]:
     if proc.returncode != 0:
         raise RuntimeError(f"sonar-scanner failed: {proc.stderr[-300:]}")
 
-    # 解析完了待ち (簡易ポーリング)
+    # Wait for analysis completion (simple polling)
     issues = _poll_issues(host, token, project_key)
     penalty = sum(
         SEVERITY_PENALTY.get(i.get("severity", "INFO"), 0.5) for i in issues

@@ -1,11 +1,11 @@
-"""Pluggable grader フレームワーク.
+"""Pluggable grader framework.
 
-各 grader は「出力契約 (プロンプト)」と「採点」を所有し、最終的に
-(resolved: bool, quality_score: 0-100) という共通インターフェイスに正規化して返す。
-これにより runner の集計 (_aggregate_attempts) / combined_score / pass@k /
-usability / certify を一切変更せず再利用できる。
+Each grader owns its output contract (prompt) and evaluation logic, normalizing
+the final result to a common interface: (resolved: bool, quality_score: 0-100).
+This allows runner aggregation (_aggregate_attempts) / combined_score / pass@k /
+usability / certify to be reused without modification.
 
-詳細は DESIGN_DOMAINS.md を参照。
+Refer to DESIGN_DOMAINS.md for details.
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ from pathlib import Path
 
 @dataclass
 class GradeCtx:
-    """grader.evaluate に渡す実行コンテキスト."""
+    """Execution context passed to grader.evaluate."""
 
     work_root: Path
     quality_cfg: dict = field(default_factory=dict)
     scoring_cfg: dict = field(default_factory=dict)
-    graders_cfg: dict = field(default_factory=dict)   # config の graders:
-    reviewer: object = None                           # code grader の LLMレビュー用
-    judge: object = None                              # judge grader の採点モデル
+    graders_cfg: dict = field(default_factory=dict)   # graders: section in config
+    reviewer: object = None                           # LLM reviewer for code grader
+    judge: object = None                              # Scoring model for judge grader
     judge_seeds: int = 1
     timeout: int = 120
     lang: str = "en"
@@ -32,16 +32,16 @@ class GradeCtx:
 
 @dataclass
 class GraderEval:
-    """採点結果 (Attempt に写像される正規化済みフィールド)."""
+    """Grading result (normalized fields mapped to Attempt)."""
 
     resolved: bool = False
     quality_score: float = 0.0
     parse_ok: bool = False
     parse_error: str = ""
-    parsed_files: dict = field(default_factory=dict)   # artifacts 保存物
+    parsed_files: dict = field(default_factory=dict)   # Saved artifacts
     fail_reason: str = ""
-    components: dict = field(default_factory=dict)      # 採点内訳 (レポート表示)
-    detail_output: str = ""                             # 採点詳細 (test_output 相当)
+    components: dict = field(default_factory=dict)      # Quality breakdown (displayed in reports)
+    detail_output: str = ""                             # Detailed output (equivalent to test_output)
 
 
 class Grader(ABC):
@@ -50,23 +50,23 @@ class Grader(ABC):
 
     @abstractmethod
     def build_prompt(self, task, lang: str) -> tuple[str, str]:
-        """(system, user) プロンプトを返す (出力フォーマットの指示を含む)."""
+        """Returns (system, user) prompts (including output format instructions)."""
 
     @abstractmethod
     def evaluate(self, task, raw_output: str, ctx: GradeCtx) -> GraderEval:
-        """モデル出力を採点して GraderEval を返す."""
+        """Evaluates model output and returns GraderEval."""
 
-    # --- validate (MockClient) 用 ---
+    # --- For validate (MockClient) ---
     def mock_gold(self, task) -> str:
-        """正解相当の出力 (resolved になるべき)."""
+        """Expected passing output (should be resolved)."""
         raise NotImplementedError
 
     def mock_broken(self, task) -> str:
-        """失敗すべき出力 (resolved にならないべき)."""
-        return "raise SyntaxError(  # 壊れた出力 (フォーマット不正)"
+        """Expected failing output (should not be resolved)."""
+        return "raise SyntaxError(  # Broken output (invalid format)"
 
 
-# grader 名 -> インスタンス (遅延生成でモジュール循環を避ける)
+# Grader name -> instance mapping (lazy initialization to prevent circular imports)
 _CACHE: dict[str, Grader] = {}
 
 
@@ -91,13 +91,13 @@ def get_grader(name: str | None) -> Grader:
         g = QaGrader()
     else:
         raise ValueError(
-            f"未知の grader: {name!r} (code|detection|constraint|judge|qa のいずれか)"
+            f"Unknown grader: {name!r} (must be one of: code|detection|constraint|judge|qa)"
         )
     _CACHE[name] = g
     return g
 
 
-# grader 名 -> ドメイン (results 記録・certify 用)。台帳が domain を持たない場合の既定。
+# Grader name -> Domain mapping (for results logging & certification). Default when ledger omits domain.
 GRADER_DOMAIN = {
     "code": "code",
     "detection": "security",

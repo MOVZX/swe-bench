@@ -1,13 +1,13 @@
-"""usabilityティア分類.
+"""Usability tier classification.
 
-ベンチのスコアを「実際どれくらい任せられるか」という運用判断に翻訳する。
-信頼性 (success_rate) と品質 (quality) の2軸でタスクを3ティアに分類する:
+Translates benchmark scores into operational judgment regarding "how much can actually be delegated."
+Classifies tasks into 3 tiers based on 2 axes: reliability (success_rate) and quality (quality):
 
-- autonomous (🟢 自律)  … レビューほぼ不要で任せられる
-- assisted   (🟡 補助)  … レビュー前提なら使える
-- unusable   (🔴 不可)  … この種のタスクには任せられない
+- autonomous (🟢 Autonomous) … Delegation possible with practically no review
+- assisted   (🟡 Assisted)   … Usable provided a review process is in place
+- unusable   (🔴 Unusable)   … Cannot be delegated for this type of task
 
-しきい値は config.yaml の `usability:` で上書きできる。
+Thresholds can be overridden in config.yaml under `usability:`.
 """
 
 from __future__ import annotations
@@ -17,15 +17,15 @@ from collections import Counter
 TIERS = ("autonomous", "assisted", "unusable")
 
 TIER_LABEL = {
-    "autonomous": "🟢 自律",
-    "assisted": "🟡 補助",
-    "unusable": "🔴 不可",
+    "autonomous": "🟢 Autonomous",
+    "assisted": "🟡 Assisted",
+    "unusable": "🔴 Unusable",
 }
 
 TIER_DESC = {
-    "autonomous": "レビューほぼ不要で任せられる",
-    "assisted": "レビュー前提なら使える",
-    "unusable": "この種のタスクには任せられない",
+    "autonomous": "Delegation possible with practically no review",
+    "assisted": "Usable provided a review process is in place",
+    "unusable": "Cannot be delegated for this type of task",
 }
 
 DEFAULTS = {
@@ -35,7 +35,7 @@ DEFAULTS = {
 
 
 def classify(success_rate: float, quality: float, cfg: dict | None = None) -> str:
-    """(success_rate, quality) をティアに分類する."""
+    """Classifies (success_rate, quality) into a tier."""
     cfg = cfg or {}
     auto = {**DEFAULTS["autonomous"], **(cfg.get("autonomous") or {})}
     assist = {**DEFAULTS["assisted"], **(cfg.get("assisted") or {})}
@@ -47,9 +47,9 @@ def classify(success_rate: float, quality: float, cfg: dict | None = None) -> st
 
 
 def aggregate(results, cfg: dict | None = None):
-    """tier別カウントと、難易度×tierのマトリクスを返す.
+    """Returns tier counts and a difficulty x tier matrix.
 
-    戻り値: (overall: Counter, by_difficulty: dict[str, Counter])
+    Returns: (overall: Counter, by_difficulty: dict[str, Counter])
     """
     overall: Counter = Counter()
     by_diff: dict[str, Counter] = {}

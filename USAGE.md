@@ -81,32 +81,32 @@ llmbench validate --tasks t016        # 追加した特定タスクだけ検証
 
 ```yaml
 models:
-  local-openai:                         # llama.cpp / LM Studio / vLLM など
-    type: openai
-    base_url: "http://localhost:8085/v1"
-    model: "auto"                       # サーバのロード中モデルを自動採用 (config編集不要)
-    api_key: "sk-local"                 # ローカルはダミーで可
-    temperature: 0.2
-    max_tokens: 4096
-  local-ollama:
-    type: ollama
-    base_url: "http://localhost:11434"
-    model: "qwen2.5-coder:32b"
-  ref-gpt:                              # compareの参照アンカー (API)
-    type: openai
-    base_url: "https://api.openai.com/v1"
-    model: "gpt-4o"
-    api_key: "${OPENAI_API_KEY}"        # ${VAR} は環境変数から展開
+    local-openai: # llama.cpp / LM Studio / vLLM など
+        type: openai
+        base_url: "http://localhost:8085/v1"
+        model: "auto" # サーバのロード中モデルを自動採用 (config編集不要)
+        api_key: "sk-local" # ローカルはダミーで可
+        temperature: 0.2
+        max_tokens: 4096
+    local-ollama:
+        type: ollama
+        base_url: "http://localhost:11434"
+        model: "qwen2.5-coder:32b"
+    ref-gpt: # compareの参照アンカー (API)
+        type: openai
+        base_url: "https://api.openai.com/v1"
+        model: "gpt-4o"
+        api_key: "${OPENAI_API_KEY}" # ${VAR} は環境変数から展開
 
 run:
-  issue_lang: en                        # ja に切替で language tax 検証
-  test_timeout: 120
-  runs: 1                               # 既定の試行回数 (>1 で pass@k)
-  sample_temp: 0.8                      # 複数試行時の温度
+    issue_lang: en # ja に切替で language tax 検証
+    test_timeout: 120
+    runs: 1 # 既定の試行回数 (>1 で pass@k)
+    sample_temp: 0.8 # 複数試行時の温度
 
-usability:                              # ティア分類のしきい値
-  autonomous: {min_success: 0.9, min_quality: 80}
-  assisted:   {min_success: 0.6, min_quality: 0}
+usability: # ティア分類のしきい値
+    autonomous: { min_success: 0.9, min_quality: 80 }
+    assisted: { min_success: 0.6, min_quality: 0 }
 ```
 
 > 💡 **`model: auto` が効くと config を二度と触らなくて済みます。** llama.cpp等でggufを
@@ -158,19 +158,19 @@ llmbench run --model router --client-type multiagent --base-url http://localhost
 llmbench run --model qwen2.5-coder:32b --base-url http://192.168.1.10:11434           # リモートOllama
 ```
 
-| オプション | 説明 |
-|---|---|
-| `--model` | **必須**。config の `models:` キー、または Ollama稼働モデル名 |
-| `--runs` | 各タスクの試行回数。`>1` で成功率・pass@k を計測（既定: `run.runs` または1） |
-| `--sample-temp` | 複数試行時のサンプリング温度（既定: `run.sample_temp` または0.8） |
-| `--label` | 結果ラベルを明示指定（既定: `model:auto`時はサーバ検出名） |
-| `--tasks` | カンマ区切りのタスクID（例: `t001,t003`）。省略で全タスク |
-| `--lang` | `en` / `ja`。configの `issue_lang` を上書き |
-| `--ollama-host` | Ollama接続先（未定義モデルの自動解決に使用） |
-| `--base-url` | 接続先URLを明示指定。configの `base_url` を上書き(例: `http://localhost:8085/v1`) |
-| `--client-type` | `openai` / `ollama` / `multiagent`。config未定義でも接続種別を直接指定(`--base-url` と併用) |
-| `--output` | 結果出力先ディレクトリ（既定: `results`） |
-| `--tasks-dir` / `--config` | タスク定義 / 設定ファイルの場所 |
+| オプション                 | 説明                                                                                        |
+| -------------------------- | ------------------------------------------------------------------------------------------- |
+| `--model`                  | **必須**。config の `models:` キー、または Ollama稼働モデル名                               |
+| `--runs`                   | 各タスクの試行回数。`>1` で成功率・pass@k を計測（既定: `run.runs` または1）                |
+| `--sample-temp`            | 複数試行時のサンプリング温度（既定: `run.sample_temp` または0.8）                           |
+| `--label`                  | 結果ラベルを明示指定（既定: `model:auto`時はサーバ検出名）                                  |
+| `--tasks`                  | カンマ区切りのタスクID（例: `t001,t003`）。省略で全タスク                                   |
+| `--lang`                   | `en` / `ja`。configの `issue_lang` を上書き                                                 |
+| `--ollama-host`            | Ollama接続先（未定義モデルの自動解決に使用）                                                |
+| `--base-url`               | 接続先URLを明示指定。configの `base_url` を上書き(例: `http://localhost:8085/v1`)           |
+| `--client-type`            | `openai` / `ollama` / `multiagent`。config未定義でも接続種別を直接指定(`--base-url` と併用) |
+| `--output`                 | 結果出力先ディレクトリ（既定: `results`）                                                   |
+| `--tasks-dir` / `--config` | タスク定義 / 設定ファイルの場所                                                             |
 
 実行が終わると、標準出力に Resolved率・（多試行なら）平均成功率・品質平均・Combined平均と、
 保存された結果ファイルのパスが表示されます。
@@ -188,11 +188,11 @@ llmbench run --model local-openai --runs 5
 
 レポート/結果に出る信頼性指標：
 
-| 指標 | 意味 |
-|---|---|
-| **成功率 (pass@1)** | 1回試行で通る期待値。**信頼性の主指標** |
-| ≥1成功 | N回中1回でも通ったか（再試行込みの到達可能性） |
-| flaky | `2/5 passed` のように成功・失敗が割れる状態。不安定の証拠 |
+| 指標                | 意味                                                      |
+| ------------------- | --------------------------------------------------------- |
+| **成功率 (pass@1)** | 1回試行で通る期待値。**信頼性の主指標**                   |
+| ≥1成功              | N回中1回でも通ったか（再試行込みの到達可能性）            |
+| flaky               | `2/5 passed` のように成功・失敗が割れる状態。不安定の証拠 |
 
 `combined` は成功率でスケールされるため、フレるタスクは自動的に減点されます
 （例: 60%成功・品質90 → 0.6×95 = 57点）。同じモデルでも `--runs` を増やすと、
@@ -204,11 +204,11 @@ llmbench run --model local-openai --runs 5
 
 各タスクは success_rate と quality から3ティアに分類されます（しきい値は `config.yaml`）。
 
-| ティア | 既定条件 | 運用判断 |
-|---|---|---|
-| 🟢 自律 | success ≥ 0.9 かつ quality ≥ 80 | レビューほぼ不要で任せられる |
-| 🟡 補助 | success ≥ 0.6 | レビュー前提なら使える |
-| 🔴 不可 | 上記未満 | この種のタスクには任せられない |
+| ティア  | 既定条件                        | 運用判断                       |
+| ------- | ------------------------------- | ------------------------------ |
+| 🟢 自律 | success ≥ 0.9 かつ quality ≥ 80 | レビューほぼ不要で任せられる   |
+| 🟡 補助 | success ≥ 0.6                   | レビュー前提なら使える         |
+| 🔴 不可 | 上記未満                        | この種のタスクには任せられない |
 
 レポートの「usability判定」セクションには、ティア集計・**難易度×ティアの割合**・
 保守的な総合推奨（🔴不可が1つでもあれば「自律」と言い切らない）が出ます。
@@ -249,13 +249,13 @@ llmbench certify results/<stamp>_<model>_results.json
 主判定は **使えるライン = L4(expert) を独立に合格**（成功率 ≥ 60% かつ combined ≥ 55）。
 参考として累積到達レベル（下位tierから連続合格した最上位）と、独立合格tier一覧も表示します。
 
-| Gate | 条件 (tier平均) | 意味 |
-|---|---|---|
-| L1 / L2 | 成功率 ≥ 90% / ≥ 85% | 基本〜単純作業 |
-| L3 hard | 成功率 ≥ 75% かつ combined ≥ 60 | 実務の単純〜中級バグ |
-| **L4 expert** | **成功率 ≥ 60% かつ combined ≥ 55** | **✅ 使えるライン** |
-| L5 frontier | 成功率 ≥ 40% | フロンティア級 |
-| L6 architect | 成功率 ≥ 55% かつ combined ≥ 60 (暫定) | アーキテクト級 (上位帯の分離) |
+| Gate           | 条件 (tier平均)                                    | 意味                            |
+| -------------- | -------------------------------------------------- | ------------------------------- |
+| L1 / L2        | 成功率 ≥ 90% / ≥ 85%                               | 基本〜単純作業                  |
+| L3 hard        | 成功率 ≥ 75% かつ combined ≥ 60                    | 実務の単純〜中級バグ            |
+| **L4 expert**  | **成功率 ≥ 60% かつ combined ≥ 55**                | **✅ 使えるライン**             |
+| L5 frontier    | 成功率 ≥ 40%                                       | フロンティア級                  |
+| L6 architect   | 成功率 ≥ 55% かつ combined ≥ 60 (暫定)             | アーキテクト級 (上位帯の分離)   |
 | L7 grandmaster | 成功率 ≥ 35% かつ combined ≥ 55 (暫定・天井評価用) | グランドマスター級 (天井評価帯) |
 
 > 閾値は `llmbench/certify.py` の `DEFAULT_GATES` で調整可能。実モデル較正で確定するのが推奨。
@@ -393,12 +393,12 @@ results/
 
 役割分担：
 
-| 出力 | いつ見るか |
-|---|---|
-| **実行ログ**（標準出力） | 実行中にその場で「動いてるか」を把握する |
-| **`report.md`** ② | 実行後にスコアと品質を俯瞰する |
-| **`artifacts/`** ③ | 失敗や低スコアの**原因をコードレベルで深掘り**する |
-| **`results.json`** ① | スクリプトで集計・モデル間比較する |
+| 出力                     | いつ見るか                                         |
+| ------------------------ | -------------------------------------------------- |
+| **実行ログ**（標準出力） | 実行中にその場で「動いてるか」を把握する           |
+| **`report.md`** ②        | 実行後にスコアと品質を俯瞰する                     |
+| **`artifacts/`** ③       | 失敗や低スコアの**原因をコードレベルで深掘り**する |
+| **`results.json`** ①     | スクリプトで集計・モデル間比較する                 |
 
 ---
 
@@ -417,10 +417,10 @@ results/
 
 - **1行目** `[i/N] task_id (難易度) タイトル` — 進捗
 - **2行目** `生成OK / 生成パース失敗` — LLM出力のパース結果。生成ファイル名・トークン数・tok/s
-  - パース失敗時は `出力プレビュー:` にLLM生出力の冒頭が出る
+    - パース失敗時は `出力プレビュー:` にLLM生出力の冒頭が出る
 - **3行目** `└ path (n LOC): コード冒頭` — 適用されたコードの行数と先頭2行プレビュー（目視確認用）
 - **4行目** `✅ RESOLVED / ❌ FAILED` — テスト判定・quality・combined・生成時間
-  - 失敗時は `| ...` で **pytest出力の末尾3行** が表示され、その場で失敗理由が分かる
+    - 失敗時は `| ...` で **pytest出力の末尾3行** が表示され、その場で失敗理由が分かる
 
 失敗例：
 
@@ -446,20 +446,23 @@ results/
 
 ```markdown
 # llmbench レポート: Qwopus3.6-27B-Coder-MTP-Q6_K
+
 Issue言語: `en` / タスク数: 20 / 試行: ×5
 
 ## サマリ
-| 指標 | 値 |
-|---|---|
-| ✅ Resolved率 | **95.0%** (19/20) |
-| 🎲 平均成功率 (pass@1, ×5) | **93.0%** |
-| 🔁 ≥1成功できたタスク | **95.0%** (19/20) |
-| 🏅 品質平均 (resolvedのみ) | **89.8 / 100** |
-| 🎯 Combined平均 | **88.2 / 100** |
+
+| 指標                       | 値                |
+| -------------------------- | ----------------- |
+| ✅ Resolved率              | **95.0%** (19/20) |
+| 🎲 平均成功率 (pass@1, ×5) | **93.0%**         |
+| 🔁 ≥1成功できたタスク      | **95.0%** (19/20) |
+| 🏅 品質平均 (resolvedのみ) | **89.8 / 100**    |
+| 🎯 Combined平均            | **88.2 / 100**    |
 
 ## 🧭 usability判定
+
 - 🟢 自律 17/20 / 🟡 補助 2/20 / 🔴 不可 1/20
-> 総合推奨: おおむね自律。ただし🔴不可 1/20 (5%) は要注意
+    > 総合推奨: おおむね自律。ただし🔴不可 1/20 (5%) は要注意
 ```
 
 ### タスク別結果（一覧表）
@@ -467,10 +470,10 @@ Issue言語: `en` / タスク数: 20 / 試行: ×5
 `判定` 列に usability ティア（🟢/🟡/🔴）が出ます。多試行時はさらに **信頼性**列
 （`4/5 (成功率80%)`）が加わり、`備考` に `flaky 3/5 passed` 等が入ります。
 
-| | Task | 難易度 | 判定 | 信頼性 | 生成ファイル | Quality | Combined | 備考 |
-|---|---|---|---|---|---|---|---|---|
-| ✅ | t007 | medium | 🟡 補助 | 4/5 (成功率80%) | `word_freq.py` | 100 | 80 | flaky 4/5 passed |
-| ❌ | t020 | hard | 🔴 不可 | 0/5 (成功率0%) | `calc.py` | 0 | 0 | tests failed |
+|     | Task | 難易度 | 判定    | 信頼性          | 生成ファイル   | Quality | Combined | 備考             |
+| --- | ---- | ------ | ------- | --------------- | -------------- | ------- | -------- | ---------------- |
+| ✅  | t007 | medium | 🟡 補助 | 4/5 (成功率80%) | `word_freq.py` | 100     | 80       | flaky 4/5 passed |
+| ❌  | t020 | hard   | 🔴 不可 | 0/5 (成功率0%)  | `calc.py`      | 0       | 0        | tests failed     |
 
 ### タスク別詳細
 
@@ -478,13 +481,14 @@ Issue言語: `en` / タスク数: 20 / 試行: ×5
 
 ```markdown
 ### ✅ t007 — word_frequencies treats Word/word as different
+
 - 難易度: medium / 判定: RESOLVED (flaky 4/5 passed) / usability: 🟡 補助
 - 信頼性: 成功 4/5 （成功率 80% = pass@1） / 5回中≥1成功: ✓
 - 生成ファイル: word_freq.py
 - 生成物: `<stamp>_<model>_artifacts/t007/`
 - 品質内訳（下記は代表1試行の値。上のQuality は5試行の平均）:
-  - ruff: ✅ 指摘なし (17 LOC)
-  - complexity: MI=100 / 最大複雑度ランク=A → score=100
+    - ruff: ✅ 指摘なし (17 LOC)
+    - complexity: MI=100 / 最大複雑度ランク=A → score=100
 ```
 
 > ⚠️ **多試行時の注意**: 品質内訳（ruff/complexity）は**代表1試行**の値、Quality数値は
@@ -505,12 +509,12 @@ Issue言語: `en` / タスク数: 20 / 試行: ×5
 
 ### ケース別の使い分け
 
-| 症状 | 見るファイル | 分かること |
-|---|---|---|
-| **パース失敗**（`生成パース失敗`） | `llm_output.txt` | `--- FILE: path ---` マーカーやコードブロックの形式崩れ |
-| **テスト失敗**（`tests_failed`） | `test_output.txt` → `generated/` | どのassertで落ちたか → 該当コードのロジック誤り |
-| **品質が低い** | `generated/<path>` | ruff指摘箇所・複雑な関数を実コードで確認 |
-| **動いてるか半信半疑** | `generated/<path>` | 生成コードをそのまま読んで妥当性を判断 |
+| 症状                               | 見るファイル                     | 分かること                                              |
+| ---------------------------------- | -------------------------------- | ------------------------------------------------------- |
+| **パース失敗**（`生成パース失敗`） | `llm_output.txt`                 | `--- FILE: path ---` マーカーやコードブロックの形式崩れ |
+| **テスト失敗**（`tests_failed`）   | `test_output.txt` → `generated/` | どのassertで落ちたか → 該当コードのロジック誤り         |
+| **品質が低い**                     | `generated/<path>`               | ruff指摘箇所・複雑な関数を実コードで確認                |
+| **動いてるか半信半疑**             | `generated/<path>`               | 生成コードをそのまま読んで妥当性を判断                  |
 
 > 💡 `generated/` 配下は適用された**そのままのコード**です。手元にコピーして
 > 自分のpytestやエディタで再現確認することもできます。
@@ -524,32 +528,44 @@ artifactsに分離されているため軽い）。モデル間比較やCIに向
 
 ```jsonc
 {
-  "model": "Qwopus3.6-27B-Coder-MTP-Q6_K",   // model:auto検出時は実モデル名
-  "issue_lang": "en",
-  "artifacts_dir": "<stamp>_<model>_artifacts",
-  "summary": {
-    "resolved_rate": 0.95,
-    "avg_quality_resolved": 89.8,
-    "avg_combined": 88.2,
-    "n_tasks": 20,
-    "runs": 5,
-    "usability": { "autonomous": 17, "assisted": 2, "unusable": 1 },
-    "avg_success_rate": 0.93,   // = 平均pass@1 (多試行時のみ)
-    "solved_any_rate": 0.95,    // N回中≥1成功 (多試行時のみ)
-    "avg_pass_at_k": 0.95       // k=runs時は退化する点に注意
-  },
-  "results": [
-    {
-      "task_id": "t007", "difficulty": "medium", "title": "...",
-      "resolved": true, "quality_score": 100.0, "combined": 80.0,
-      "runs": 5, "n_pass": 4, "success_rate": 0.8,
-      "pass_at_1": 0.8, "pass_at_k": 1.0,
-      "usability_tier": "assisted",
-      "parse_ok": true, "fail_reason": "flaky 4/5 passed",
-      "attempts": [ /* 各試行の {resolved, quality, combined} */ ],
-      "quality_components": { /* ruff / complexity */ }
-    }
-  ]
+    "model": "Qwopus3.6-27B-Coder-MTP-Q6_K", // model:auto検出時は実モデル名
+    "issue_lang": "en",
+    "artifacts_dir": "<stamp>_<model>_artifacts",
+    "summary": {
+        "resolved_rate": 0.95,
+        "avg_quality_resolved": 89.8,
+        "avg_combined": 88.2,
+        "n_tasks": 20,
+        "runs": 5,
+        "usability": { "autonomous": 17, "assisted": 2, "unusable": 1 },
+        "avg_success_rate": 0.93, // = 平均pass@1 (多試行時のみ)
+        "solved_any_rate": 0.95, // N回中≥1成功 (多試行時のみ)
+        "avg_pass_at_k": 0.95, // k=runs時は退化する点に注意
+    },
+    "results": [
+        {
+            "task_id": "t007",
+            "difficulty": "medium",
+            "title": "...",
+            "resolved": true,
+            "quality_score": 100.0,
+            "combined": 80.0,
+            "runs": 5,
+            "n_pass": 4,
+            "success_rate": 0.8,
+            "pass_at_1": 0.8,
+            "pass_at_k": 1.0,
+            "usability_tier": "assisted",
+            "parse_ok": true,
+            "fail_reason": "flaky 4/5 passed",
+            "attempts": [
+                /* 各試行の {resolved, quality, combined} */
+            ],
+            "quality_components": {
+                /* ruff / complexity */
+            },
+        },
+    ],
 }
 ```
 
@@ -606,15 +622,15 @@ llmbench run --model <model> --tasks t011,t013
 
 ## 15. トラブルシューティング
 
-| 症状 | 原因・対処 |
-|---|---|
-| `config not found` | `--config` のパス、または実行ディレクトリを確認 |
-| 接続エラー / タイムアウト | `base_url` とサーバ稼働状況。`type` が `openai`/`ollama` と一致しているか |
-| `model` 不一致エラー | `config.yaml` の `model` をサーバ側の実モデル名に合わせる |
+| 症状                        | 原因・対処                                                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config not found`          | `--config` のパス、または実行ディレクトリを確認                                                                                             |
+| 接続エラー / タイムアウト   | `base_url` とサーバ稼働状況。`type` が `openai`/`ollama` と一致しているか                                                                   |
+| `model` 不一致エラー        | `config.yaml` の `model` をサーバ側の実モデル名に合わせる                                                                                   |
 | 全タスクが `生成パース失敗` | モデルが `--- FILE: path ---` + コードブロック形式に従えていない。`llm_output.txt` を確認し、必要なら `max_tokens` を増やす（出力途中切れ） |
-| `tests_failed` が多い | `artifacts/<id>/test_output.txt` で失敗assertを確認。ロジック誤りかパッチ対象ファイル違い |
-| `validate` が FAIL | パイプライン側の問題。タスク自作直後ならディレクトリ構成（`gold/` `tests/`）を確認 |
-| 品質スコアが安定しない | `temperature` を下げる（既定0.2推奨）。LLMレビューを使う場合は `reviewer_model` の稼働を確認 |
+| `tests_failed` が多い       | `artifacts/<id>/test_output.txt` で失敗assertを確認。ロジック誤りかパッチ対象ファイル違い                                                   |
+| `validate` が FAIL          | パイプライン側の問題。タスク自作直後ならディレクトリ構成（`gold/` `tests/`）を確認                                                          |
+| 品質スコアが安定しない      | `temperature` を下げる（既定0.2推奨）。LLMレビューを使う場合は `reviewer_model` の稼働を確認                                                |
 
 ---
 
@@ -701,11 +717,11 @@ llmbench certify --merge results/<stamp1>_<model>_results.json \
 
 読み方：
 
-| 項目 | 意味 |
-|---|---|
-| **ドメイン別テーブル** | `certify_domains`（config.yaml）のしきい値に対する合否。coding tierの合否とは独立に判定される |
-| **バランス指数** | 測定済みドメイン（coding含む・writing/medicalは既定除外）の平均combinedの調和平均。1ドメインだけ極端に弱いモデルは算術平均より大きく下がる — 「一芸特化」を見抜く指標 |
-| **医療正答率内訳** | 全体 + 難易度別(med_basic/med_std/med_hard)。チャンス正答率(5択≈20%)との比較で「本当に知識があるか」を判断する材料にする。**参考値**であり臨床適用の根拠にはしない |
+| 項目                   | 意味                                                                                                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ドメイン別テーブル** | `certify_domains`（config.yaml）のしきい値に対する合否。coding tierの合否とは独立に判定される                                                                         |
+| **バランス指数**       | 測定済みドメイン（coding含む・writing/medicalは既定除外）の平均combinedの調和平均。1ドメインだけ極端に弱いモデルは算術平均より大きく下がる — 「一芸特化」を見抜く指標 |
+| **医療正答率内訳**     | 全体 + 難易度別(med_basic/med_std/med_hard)。チャンス正答率(5択≈20%)との比較で「本当に知識があるか」を判断する材料にする。**参考値**であり臨床適用の根拠にはしない    |
 
 `report.md` にも同内容の「🌐 ドメイン別」節が追加されます（`llmbench run --with-sec ...` 等の実行後、
 `--output` 先の `*_report.md` を確認してください）。

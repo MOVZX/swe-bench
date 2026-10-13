@@ -1,8 +1,8 @@
-"""隔離実行: タスクの一時コピー作成とpytest実行.
+"""Isolated execution: Creating a temporary task copy and running pytest.
 
-v1はvenv + subprocess方式。タスクはstdlib-onlyなので、llmbench自身の
-実行環境のPython (pytest入り) をそのまま使う。元タスクディレクトリは
-一切変更しない (一時コピーにのみpatchを適用する)。
+v1 uses a venv + subprocess approach. Tasks are stdlib-only, so it directly uses
+the Python environment (with pytest installed) running llmbench itself. The original
+task directory is left completely unmodified (patches are applied only to the temp copy).
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ class TestResult:
 
 
 def make_workspace(task_dir: Path, work_root: Path) -> Path:
-    """buggy_code + tests を一時作業ディレクトリへコピーして返す."""
+    """Copies buggy_code + tests into a temporary workspace directory and returns it."""
     work_root.mkdir(parents=True, exist_ok=True)
     ws = Path(tempfile.mkdtemp(prefix=task_dir.name + "_", dir=work_root))
     shutil.copytree(task_dir / "buggy_code", ws, dirs_exist_ok=True)
@@ -34,13 +34,13 @@ def make_workspace(task_dir: Path, work_root: Path) -> Path:
 
 
 def run_tests(workspace: Path, timeout: int = 120) -> TestResult:
-    """workspace内でpytestを実行する."""
+    """Runs pytest inside the workspace directory."""
     cmd = [
         sys.executable, "-m", "pytest", "tests",
         "-q", "--no-header", "-x", "--timeout-method=thread",
         "-p", "no:cacheprovider",
     ]
-    # pytest-timeoutが無い環境でも動くよう、無ければオプションを落とす
+    # Drop option if pytest-timeout is not available to ensure execution
     if not _has_pytest_timeout():
         cmd = [c for c in cmd if c != "--timeout-method=thread"]
     try:

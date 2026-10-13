@@ -1,4 +1,4 @@
-"""LLMレビュー採点: 別LLM(または同一LLM)にpatchを0-10点でレビューさせる."""
+"""LLM review scoring: Has a separate LLM (or same LLM) review patches on a 0-10 scale."""
 
 from __future__ import annotations
 
@@ -35,6 +35,6 @@ def llm_review_score(
         raw_score = float(data.get("score", 0))
     except (json.JSONDecodeError, TypeError, ValueError):
         return None, {"reason": "invalid JSON from reviewer"}
-    score = max(0.0, min(10.0, raw_score)) * 10.0  # 0-10 → 0-100
+    score = max(0.0, min(10.0, raw_score)) * 10.0  # 0-10 -> 0-100
     return score, {"reviewer": reviewer_client.name,
                    "reason": str(data.get("reason", ""))[:200]}

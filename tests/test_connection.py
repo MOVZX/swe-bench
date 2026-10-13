@@ -1,4 +1,4 @@
-"""接続先解決ロジックの単体テスト (ネットワーク不要・全てモック)."""
+"""Unit tests for connection resolution logic (no network required, all mocked)."""
 
 from __future__ import annotations
 
@@ -100,6 +100,7 @@ def test_auto_prefer_substring(monkeypatch):
 
 
 def test_auto_prefer_no_match_raises(monkeypatch):
+    import llmbench.requests
     import llmbench.clients.openai_compat as oc
     monkeypatch.setattr(oc.requests, "get", _fake_models_get(["llama-3"]))
     with pytest.raises(ValueError, match="auto_prefer"):
@@ -135,7 +136,7 @@ def test_ollama_config_beats_env(monkeypatch):
     assert c.base_url == "http://cfg:1"
 
 
-# ---------- BenchmarkRunner: ollama_host 優先順 ----------
+# ---------- BenchmarkRunner: ollama_host priority ----------
 
 def _runner(config):
     return BenchmarkRunner(config, Path("tasks"))
@@ -144,16 +145,16 @@ def _runner(config):
 def test_ollama_host_priority(monkeypatch):
     cfg_model = {"models": {"lo": {"type": "ollama", "base_url": "http://cfg:1"}}}
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
-    # run.ollama_host が最優先
+    # run.ollama_host takes highest priority
     r = _runner({**cfg_model, "run": {"ollama_host": "http://cli:1"}})
     assert r.ollama_host() == "http://cli:1"
-    # env が config モデルより優先
+    # env takes precedence over config model
     monkeypatch.setenv("OLLAMA_HOST", "http://env:1")
     assert _runner(cfg_model).ollama_host() == "http://env:1"
-    # env なし → configモデル
+    # No env -> config model
     monkeypatch.delenv("OLLAMA_HOST")
     assert _runner(cfg_model).ollama_host() == "http://cfg:1"
-    # 何もなし → 既定
+    # Nothing set -> default
     assert _runner({}).ollama_host() == "http://localhost:11434"
 
 
@@ -165,7 +166,7 @@ def test_resolve_base_url_override():
                                    "model": "x"}}})
     cfg = r.resolve_model("lo", base_url="http://override:2/v1")
     assert cfg["base_url"] == "http://override:2/v1"
-    # 元のconfigは破壊しない
+    # Original config remains untouched
     assert r.config["models"]["lo"]["base_url"] == "http://cfg:1/v1"
 
 
@@ -209,11 +210,11 @@ def test_resolve_unknown_raises(monkeypatch):
     import llmbench.runner as rn
     monkeypatch.setattr(rn, "list_ollama_models", lambda h, **k: ["other"])
     r = _runner({})
-    with pytest.raises(ValueError, match="未インストール"):
+    with pytest.raises(ValueError, match="Not installed"):
         r.resolve_model("nope")
 
 
-# ---------- reviewer_model の統一解決 ----------
+# ---------- Unified resolution for reviewer_model ----------
 
 def test_reviewer_resolves_via_ollama_autodetect(monkeypatch):
     import llmbench.runner as rn

@@ -1,15 +1,15 @@
-"""LLM出力のパースとファイル適用.
+"""Parsing LLM output and applying files.
 
-出力フォーマット (プロンプトで指示する正規形式):
+Output format (canonical format specified in prompt):
 
     --- FILE: relative/path.py ---
     ```python
-    <ファイル全体の修正後コード>
+    <modified code for the entire file>
     ```
 
-ローカルLLMはunified diffの行番号を正確に出せないことが多いため、
-v1では「ファイル全体置換」方式を採用する。
-フォールバックとして ```python:path``` 形式と、単一コードブロックも解釈する。
+Because local LLMs often struggle to output precise unified diff line numbers,
+v1 adopts the "full file replacement" approach.
+As fallbacks, it also parses the ```python:path``` format and single code blocks.
 """
 
 from __future__ import annotations
@@ -26,10 +26,10 @@ CODE_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
-# harmony/channel系モデルの制御トークン (例: <|channel>, <channel|>, <|message|>)。
-# 「< と > の間にパイプ | を含むタグ」だけを除去する。通常のHTML/XMLタグ
-# (<li>, <ul>, <script> 等＝フロント系モデルがコード中に出す) はパイプを含まない
-# ので保持される。
+# Control tokens for harmony/channel-style models (e.g., <|channel>, <channel|>, <|message|>).
+# Removes only tags containing a pipe '|' between '<' and '>'. Regular HTML/XML tags
+# (<li>, <ul>, <script>, etc. output in code by frontend-focused models) lack pipes
+# and are preserved.
 CONTROL_TOKEN_RE = re.compile(r"<\|[^<>]*>|<[^<>]*\|>")
 
 
@@ -39,7 +39,7 @@ def _strip_control_tokens(text: str) -> str:
 
 @dataclass
 class ParsedPatch:
-    """パース済みpatch: 相対パス -> 修正後ファイル内容."""
+    """Parsed patch: relative path -> modified file contents."""
 
     files: dict[str, str] = field(default_factory=dict)
     parse_ok: bool = False
@@ -47,21 +47,21 @@ class ParsedPatch:
 
 
 def parse_llm_output(text: str, known_files: list[str]) -> ParsedPatch:
-    """LLM出力からファイル置換patchを抽出する.
+    """Extracts file replacement patches from LLM output.
 
-    known_files: タスクのbuggy_code配下の相対パス一覧 (パス検証と
-    単一ファイルタスクのフォールバックに使用)
+    known_files: List of relative paths under task's buggy_code directory
+    (used for path validation and single-file task fallback).
     """
     patch = ParsedPatch()
     if not text or not text.strip():
         patch.error = "empty output"
         return patch
 
-    # harmony/channel系モデル (例: <|channel>thought<channel|>) の制御トークンを
-    # 除去してから抽出する。これらが FILE マーカー行に前置されると抽出に失敗するため。
+    # Strips control tokens for harmony/channel-style models (e.g., <|channel>thought<channel|>)
+    # before extraction. If prepended to a FILE marker line, they break extraction.
     text = _strip_control_tokens(text)
 
-    # 1. 正規形式: --- FILE: path --- の直後のコードブロック
+    # 1. Canonical format: code block immediately following --- FILE: path ---
     markers = list(FILE_MARKER_RE.finditer(text))
     for i, m in enumerate(markers):
         seg_end = markers[i + 1].start() if i + 1 < len(markers) else len(text)
@@ -70,14 +70,14 @@ def parse_llm_output(text: str, known_files: list[str]) -> ParsedPatch:
         if block:
             patch.files[_norm(m.group("path"))] = block.group("code")
 
-    # 2. ```python:path``` 形式
+    # 2. ```python:path``` format
     if not patch.files:
         for block in CODE_BLOCK_RE.finditer(text):
             p = block.group("inline_path")
             if p:
                 patch.files[_norm(p)] = block.group("code")
 
-    # 3. フォールバック: 単一ファイルタスクなら最大のコードブロックを充てる
+    # 3. Fallback: For single-file tasks, assign the largest code block
     if not patch.files and len(known_files) == 1:
         blocks = [b.group("code") for b in CODE_BLOCK_RE.finditer(text)]
         candidates = [b for b in blocks if _looks_like_python(b)]
@@ -88,7 +88,7 @@ def parse_llm_output(text: str, known_files: list[str]) -> ParsedPatch:
         patch.error = "no file blocks found in output"
         return patch
 
-    # パス検証: 既知ファイル以外への書込みは拒否 (path traversal対策込み)
+    # Path validation: Reject writes to unknown paths (includes path traversal protection)
     known = set(known_files)
     bad = [p for p in patch.files if p not in known or ".." in Path(p).parts]
     if bad:
@@ -102,7 +102,7 @@ def parse_llm_output(text: str, known_files: list[str]) -> ParsedPatch:
 
 
 def apply_patch(patch: ParsedPatch, target_dir: Path) -> list[str]:
-    """patchをtarget_dirに書き込み、変更したファイルの相対パスを返す."""
+    """Writes patch contents into target_dir and returns relative paths of modified files."""
     written = []
     for rel, content in patch.files.items():
         dest = target_dir / rel

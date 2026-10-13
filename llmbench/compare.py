@@ -1,7 +1,7 @@
-"""複数の results.json を横断比較するレポートを生成する.
+"""Generates a cross-comparison report across multiple results.json files.
 
-参照モデル (強い/弱い) と並べることで、ローカルモデルのスコアを
-「どの位置にあるか」相対的に解釈できるようにする (アンカー)。
+By including reference models (strong/weak) side by side, local model scores
+can be interpreted in a relative context (anchor).
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 def load_results(paths: list[str | Path]) -> list[dict]:
-    """results.json 群を読み込む. ファイル名でなくmodel名で識別する."""
+    """Loads a collection of results.json files. Identified by model name, not filename."""
     runs = []
     for p in paths:
         p = Path(p)
@@ -28,7 +28,7 @@ def _avg_tps(results: list[dict]) -> float | None:
 
 
 def _task_index(runs: list[dict]) -> dict[str, dict]:
-    """task_id -> {difficulty, title} (最初に見つかったものを採用)."""
+    """task_id -> {difficulty, title} (takes the first encountered match)."""
     idx: dict[str, dict] = {}
     for run in runs:
         for r in run.get("results", []):
@@ -43,9 +43,9 @@ def _task_index(runs: list[dict]) -> dict[str, dict]:
 
 def render_comparison(runs: list[dict]) -> str:
     if not runs:
-        return "# モデル比較\n\n(結果がありません)\n"
+        return "# Model Comparison\n\n(No results available)\n"
 
-    # モデルごとのサマリを取り出し、combined降順でランキング
+    # Extract summary for each model and sort by combined score in descending order
     rows = []
     for run in runs:
         s = run.get("summary", {})
@@ -67,20 +67,20 @@ def render_comparison(runs: list[dict]) -> str:
     any_multi = any(r["runs"] > 1 for r in rows)
 
     lines = [
-        "# 🆚 モデル比較レポート",
+        "# 🆚 iHoree LLM Comparison Report",
         "",
-        f"対象モデル: {len(rows)} / 生成: {time.strftime('%Y-%m-%d %H:%M')}",
+        f"Target Models: {len(rows)} / Generated: {time.strftime('%Y-%m-%d %H:%M')}",
         "",
-        "## ランキング（Combined平均 降順）",
+        "## Ranking (Descending by Avg Combined)",
         "",
     ]
-    # ヘッダ
-    head = "| # | モデル | 言語 | Resolved "
+    # Header
+    head = "| # | Model | Lang | Resolved "
     sep = "|---|---|---|---|"
     if any_multi:
-        head += "| 成功率 | pass@k "
+        head += "| Success Rate | pass@k "
         sep += "---|---|"
-    head += "| 品質 | Combined | 相対 | tok/s |"
+    head += "| Quality | Combined | Relative | tok/s |"
     sep += "---|---|---|---|"
     lines += [head, sep]
     for i, r in enumerate(rows, 1):
@@ -99,9 +99,9 @@ def render_comparison(runs: list[dict]) -> str:
             f"| {rel:.0f}% | {tps} |"
         )
 
-    # usabilityティア比較
-    lines += ["", "## usabilityティア比較", "",
-              "| モデル | 🟢 自律 | 🟡 補助 | 🔴 不可 |", "|---|---|---|---|"]
+    # Usability Tier Comparison
+    lines += ["", "## Usability Tier Comparison", "",
+              "| Model | 🟢 Autonomous | 🟡 Assisted | 🔴 Unusable |", "|---|---|---|---|"]
     for r in rows:
         u = r["usability"] or {}
         lines.append(
@@ -109,11 +109,11 @@ def render_comparison(runs: list[dict]) -> str:
             f"| {u.get('assisted', 0)} | {u.get('unusable', 0)} |"
         )
 
-    # タスク別マトリクス (セル = combined, 行内ベストを太字)
+    # Per-Task Matrix (cell = combined, row max in bold)
     idx = _task_index(runs)
-    lines += ["", "## タスク別 Combined マトリクス", "",
-              "各セルはそのタスクの Combined。行内の最高値を **太字**。", ""]
-    header = "| Task | 難易度 | " + " | ".join(r["model"] for r in rows) + " |"
+    lines += ["", "## Per-Task Combined Matrix", "",
+              "Each cell represents the Combined score for that task. The highest value in each row is **bolded**.", ""]
+    header = "| Task | Difficulty | " + " | ".join(r["model"] for r in rows) + " |"
     lines += [header, "|---|---|" + "---|" * len(rows)]
     for tid in sorted(idx):
         diff = idx[tid]["difficulty"]
@@ -130,8 +130,8 @@ def render_comparison(runs: list[dict]) -> str:
                 cells.append(f"{v:.0f}")
         lines.append(f"| {tid} | {diff} | " + " | ".join(cells) + " |")
 
-    lines += ["", "> 相対 = 各モデルのCombined ÷ 最良モデルのCombined。",
-              "> 参照モデル(強/弱)を併置すると、ローカルモデルの位置が読み取れる。"]
+    lines += ["", "> Relative = Each model's Combined ÷ Best model's Combined.",
+              "> Side-by-side inclusion of reference models (strong/weak) helps clarify local model standing."]
     return "\n".join(lines) + "\n"
 
 

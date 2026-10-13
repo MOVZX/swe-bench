@@ -1,14 +1,14 @@
-"""複合スコア計算と信頼性指標 (pass@k).
+"""Combined score calculation and reliability metrics (pass@k).
 
 combined = success_frac * (floor + (1 - floor) * quality / 100) * 100
 
-- success_frac=0 → 0点 (動かないコードは品質に関わらず0)
-- success_frac=1 → floor*100 〜 100点 (品質で差別化)
-- 0 < success_frac < 1 (複数試行) → 成功率で線形にスケールする
-  (例: 60%成功・品質90 → 0.6 * 95 = 57点)。信頼性を点に反映する。
+- success_frac=0 → Score 0 (Non-functional code receives 0 regardless of quality)
+- success_frac=1 → floor*100 to 100 points (Differentiated by quality)
+- 0 < success_frac < 1 (Multiple trials) → Linearly scales with success rate
+  (e.g., 60% success rate, 90 quality → 0.6 * 95 = 57 points). Reflects reliability in the score.
 
-後方互換: 単一試行 (runs=1) では success_frac は 0/1 のみを取り、
-従来の `combined = resolved * (...)` と完全に一致する。
+Backward Compatibility: For single trials (runs=1), success_frac takes only 0 or 1,
+matching `combined = resolved * (...)` exactly.
 """
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ import math
 
 
 def combined_score(resolved, quality: float, scoring_cfg: dict) -> float:
-    """複合スコアを返す.
+    """Returns the combined score.
 
-    resolved: bool (単一試行) または 0.0-1.0 の成功率 (複数試行)。
+    resolved: bool (single trial) or 0.0-1.0 success rate (multiple trials).
     """
     floor = float(scoring_cfg.get("quality_floor", 0.5))
     frac = 1.0 if resolved is True else 0.0 if resolved is False else float(resolved)
@@ -31,10 +31,10 @@ def combined_score(resolved, quality: float, scoring_cfg: dict) -> float:
 
 
 def pass_at_k(n: int, c: int, k: int) -> float:
-    """pass@k の不偏推定量 (Chen et al. 2021, "Evaluating LLMs Trained on Code").
+    """Unbiased estimator for pass@k (Chen et al. 2021, "Evaluating LLMs Trained on Code").
 
-    n: 生成サンプル数, c: 成功サンプル数, k: 許容試行回数。
-    「k回試して少なくとも1回成功する確率」の不偏推定。
+    n: Number of generated samples, c: Number of successful samples, k: Allowed trial count.
+    Unbiased estimate of "probability of at least 1 success in k attempts".
     """
     if k <= 0 or n <= 0:
         return 0.0

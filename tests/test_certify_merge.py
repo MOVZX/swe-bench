@@ -1,4 +1,4 @@
-"""merge_results() の合算ロジックの単体テスト (ネットワーク不要)."""
+"""Unit tests for merge_results() aggregation logic (no network required)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from llmbench.certify import certify, merge_results
 
 
 def _write(tmp_path, name, model, results):
-    """results.json を tmp_path に書き、そのパス(str)を返すヘルパ。"""
+    """Helper that writes results.json to tmp_path and returns its path as a string."""
     p = tmp_path / name
     p.write_text(
         json.dumps({"model": model, "results": results}, ensure_ascii=False),
@@ -35,17 +35,17 @@ def test_merge_dedup_last_wins(tmp_path):
                 [{"task_id": "t001", "difficulty": "easy", "combined": 99.0}])
     _, results = merge_results([f1, f2])
     assert len(results) == 1
-    assert results[0]["combined"] == 99.0  # 後ファイル優先
+    assert results[0]["combined"] == 99.0  # Latter file takes priority
 
 
 def test_merge_model_label_distinct(tmp_path):
-    # 同名 -> 単独
+    # Same model name -> single label
     a = _write(tmp_path, "a.json", "modelX", [{"task_id": "t1", "difficulty": "easy"}])
     b = _write(tmp_path, "b.json", "modelX", [{"task_id": "t2", "difficulty": "easy"}])
     label, _ = merge_results([a, b])
     assert label == "modelX"
 
-    # 異名 -> " + " 連結
+    # Different model names -> join with " + "
     c = _write(tmp_path, "c.json", "modelY", [{"task_id": "t3", "difficulty": "easy"}])
     label2, _ = merge_results([a, c])
     assert label2 == "modelX + modelY"
@@ -59,14 +59,14 @@ def test_merge_single_file(tmp_path):
     f = _write(tmp_path, "one.json", "m", results_in)
     label, merged = merge_results([f])
     assert label == "m"
-    # 単独 certify と同一判定になる。
+    # Identical output to standalone certification
     assert certify(merged) == certify(results_in)
 
 
 def test_merge_missing_task_id_kept(tmp_path):
     f = _write(tmp_path, "f.json", "m", [
         {"task_id": "t001", "difficulty": "easy"},
-        {"difficulty": "easy"},  # task_id 無し
+        {"difficulty": "easy"},  # Missing task_id
     ])
     _, results = merge_results([f])
     assert len(results) == 2
@@ -74,7 +74,7 @@ def test_merge_missing_task_id_kept(tmp_path):
 
 
 def test_merge_then_certify_tier_counts(tmp_path):
-    # base: L1(easy) success_rate形式 / l6: L6(architect) resolved旧形式 の混在。
+    # Mixing base: L1(easy) success_rate format and l6: L6(architect) legacy resolved format.
     base = _write(tmp_path, "base.json", "m", [
         {"task_id": "t001", "difficulty": "easy", "success_rate": 1.0,
          "combined": 90.0},
@@ -92,5 +92,5 @@ def test_merge_then_certify_tier_counts(tmp_path):
     assert tiers["L1"]["measured"] is True
     assert tiers["L6"]["n"] == 1
     assert tiers["L6"]["measured"] is True
-    # 旧形式 resolved=True は success 1.0 として扱われる。
+    # Legacy resolved=True format treated as success_rate = 1.0.
     assert tiers["L6"]["mean_success"] == 1.0
