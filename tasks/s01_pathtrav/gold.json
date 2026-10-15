@@ -3,8 +3,50 @@
     {
       "id": "path_traversal",
       "cwe": "CWE-22",
-      "any_of": ["os.path.join", "user_path", "../", "name"],
-      "keywords_all": ["travers"]
+      "any_of": [
+        "os.path.join",
+        "user_path",
+        "../",
+        "name"
+      ],
+      "keywords_all": [
+        [
+          "travers",
+          "トラバーサル",
+          "パス操作",
+          "ディレクトリ横断"
+        ]
+      ],
+      "location_any_of": [
+        "load_document",
+        "os.path.join",
+        "/download",
+        "/preview",
+        "user_path"
+      ]
+    }
+  ],
+  "allow_extra": [
+    {
+      "id": "missing_auth_secondary",
+      "any_of": [
+        "/download",
+        "/preview",
+        "app.route",
+        "download()",
+        "preview()"
+      ],
+      "keywords_all": [
+        [
+          "authentic",
+          "認証",
+          "unauthenticated",
+          "missing auth",
+          "access control",
+          "アクセス制御",
+          "no auth"
+        ]
+      ]
     }
   ]
 }

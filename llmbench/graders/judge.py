@@ -14,6 +14,7 @@ import json
 import re
 
 from . import GradeCtx, Grader, GraderEval
+from . import refusal as _refusal
 from .checks import extract_answer, run_checks
 
 _SYSTEM = """\
@@ -71,9 +72,15 @@ class JudgeGrader(Grader):
         hard = run_checks(answer, rubric.get("hard_constraints", []))
         hard_pass = all(r["passed"] for r in hard)
         hard_failed = [f"{r['kind']}({r['detail']})" for r in hard if not r["passed"]]
-        pass_score = float(
-            ctx.graders_cfg.get("judge", {}).get("pass_score", rubric.get("pass_score", 7.0))
-        )
+        # Priority order: per-task rubric.json > config graders.judge > default 7.0.
+        # The config always holds a default, so the reverse order would make the
+        # per-task pass score in the rubric permanently ignored.
+        if rubric.get("pass_score") is not None:
+            pass_score = float(rubric["pass_score"])
+        else:
+            pass_score = float(
+                ctx.graders_cfg.get("judge", {}).get("pass_score", 7.0)
+            )
 
         comp = {
             "enabled": True, "judged": False,
@@ -94,6 +101,7 @@ class JudgeGrader(Grader):
             )
             if not ev.resolved:
                 ev.fail_reason = f"hard constraints failed: {hard_failed}"
+            _refusal.apply(ev, answer, raw_output, task)
             return ev
 
         # Judge present → score across seeds and average
@@ -115,6 +123,7 @@ class JudgeGrader(Grader):
             comp["note"] = "judge produced no parseable score; fell back to hard gate"
             ev.components = {"judge": comp}
             ev.detail_output = "judge unparseable; hard gate only"
+            _refusal.apply(ev, answer, raw_output, task)
             return ev
         mean = sum(scores) / len(scores)
         comp.update({
@@ -130,6 +139,7 @@ class JudgeGrader(Grader):
         )
         if not ev.resolved:
             ev.fail_reason = f"judge {mean:.1f} < {pass_score}"
+        _refusal.apply(ev, answer, raw_output, task)
         return ev
 
     def mock_gold(self, task) -> str:

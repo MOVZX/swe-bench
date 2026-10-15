@@ -1,0 +1,3 @@
+- SQL injection against a login concatenates untrusted input into the query string.
+- The textbook tautology payload OR 1=1 makes the WHERE clause always true, so the password check no longer filters rows.
+- Sites stop this with parameterized queries or prepared statements so user data cannot change the statement structure.

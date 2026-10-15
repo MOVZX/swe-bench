@@ -1,0 +1,28 @@
+{
+  "findings": [
+    {
+      "id": "sql_injection",
+      "cwe": "CWE-89",
+      "any_of": [
+        "cursor.execute",
+        "query",
+        "record_ref",
+        "or '1'='1"
+      ],
+      "keywords_all": [
+        [
+          "inject",
+          "インジェク",
+          "sqli"
+        ]
+      ],
+      "location_any_of": [
+        "cursor.execute",
+        "query",
+        "lookup",
+        "handle_entry",
+        "record_ref"
+      ]
+    }
+  ]
+}

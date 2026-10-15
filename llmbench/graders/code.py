@@ -27,6 +27,9 @@ class CodeGrader(Grader):
         patch = parse_llm_output(raw_output, task.files)
         ev.parse_ok = patch.parse_ok
         ev.parse_error = patch.error
+        # Carry the "extraction passed but suspicious" info (partial path
+        # rejections etc.) to the runner
+        ev.parse_warnings = list(getattr(patch, "warnings", []))
         ev.parsed_files = dict(patch.files)
 
         func, ws = evaluate_functional(

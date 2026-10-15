@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import usability
+from .env import EXEC_LABEL
 
 
 def _fmt_ruff(c: dict) -> str:
@@ -39,6 +40,176 @@ def _fmt_component(name: str, c: dict) -> str:
     # Generic fallback
     detail = ", ".join(f"{k}={v}" for k, v in c.items() if k != "enabled")
     return detail
+
+
+def _env_section(env: dict) -> list[str]:
+    """Execution environment section (hardware + inference backend setup).
+
+    tok/s changes several-fold with quantization, GPU offload ratio and n_ctx,
+    even on the same GPU, so the backend setup is shown next to the specs. For
+    a cloud API, state that the host specs do not affect speed, to prevent misreading.
+    """
+    if not env:
+        return []
+    execution = env.get("execution", "unknown")
+    host = env.get("host") or {}
+    backend = env.get("backend") or {}
+    lines = ["## 🖥 Execution environment", "",
+             f"**{EXEC_LABEL.get(execution, execution)}**"]
+    if env.get("note"):
+        lines += ["", f"> {env['note']}"]
+    rows: list[tuple[str, str]] = []
+
+    # ── Host ──
+    if host.get("cpu"):
+        cores = host.get("cpu_cores")
+        detail = f" ({cores} cores)" if cores else ""
+        if host.get("cpu_cores_perf") and host.get("cpu_cores_eff"):
+            detail = (f" ({cores} threads / P{host['cpu_cores_perf']}"
+                      f"+E{host['cpu_cores_eff']})")
+        rows.append(("CPU", f"{host['cpu']}{detail}"))
+    for g in host.get("gpu") or []:
+        spec = []
+        if g.get("cores"):
+            spec.append(f"{g['cores']} cores")
+        if g.get("vram_gb"):
+            spec.append(f"VRAM {g['vram_gb']}GB")
+        elif g.get("vram"):
+            spec.append(f"VRAM {g['vram']}")
+        if g.get("compute_capability"):
+            spec.append(f"CC {g['compute_capability']}")
+        if g.get("driver"):
+            spec.append(f"driver {g['driver']}")
+        if g.get("metal"):
+            spec.append(g["metal"])
+        rows.append(("GPU", f"{g.get('name', '?')}"
+                     + (f" — {' / '.join(spec)}" if spec else "")))
+    if host.get("ram_gb"):
+        unified = " (unified memory)" if host.get("unified_memory") else ""
+        rows.append(("Memory", f"{host['ram_gb']} GB{unified}"))
+    if host.get("cuda"):
+        rows.append(("CUDA", host["cuda"]))
+    if host.get("os"):
+        rows.append(("OS", f"{host['os']} / {host.get('arch', '?')} / "
+                           f"Python {host.get('python', '?')}"))
+
+    # ── Inference backend (affects speed only for local inference) ──
+    if backend.get("kind"):
+        rows.append(("Inference backend", str(backend["kind"])))
+    # Compute backend (CUDA/ROCm/Vulkan…). llama.cpp exposes no API for it, so
+    # this is derived from the libraries loaded by the inference process.
+    rt = backend.get("runtime") or {}
+    if rt.get("compute"):
+        val = str(rt["compute"])
+        val += " (from config)" if rt.get("source") == "config" else " (auto-detected)"
+        if rt.get("evidence"):
+            val += f" — {', '.join(rt['evidence'][:3])}"
+        if rt.get("mismatch"):
+            val += (f"  ⚠️ Mismatch: the detected value is **{rt.get('detected')}** "
+                    "— the runtime: in config may not match reality")
+        rows.append(("Compute backend", val))
+    if rt.get("binary"):
+        rows.append(("Binary", f"`{rt['binary']}`"))
+    if backend.get("server_version"):
+        rows.append(("Server", str(backend["server_version"])))
+    if backend.get("quantization"):
+        rows.append(("Quantization", str(backend["quantization"])))
+    if backend.get("parameter_size"):
+        rows.append(("Parameter count", str(backend["parameter_size"])))
+    if backend.get("weights_gb"):
+        rows.append(("Model size", f"{backend['weights_gb']} GB"))
+    ratio = backend.get("gpu_offload_ratio")
+    if ratio is not None:
+        vr = backend.get("vram_resident_gb")
+        mark = "✅" if ratio >= 0.999 else "⚠️"
+        note = "" if ratio >= 0.999 else " ← tok/s drops sharply because part runs on CPU"
+        rows.append((
+            "GPU offload ratio",
+            f"{mark} {ratio * 100:.0f}%"
+            + (f" (VRAM resident {vr} GB)" if vr is not None else "")
+            + note,
+        ))
+    # Inference setup read from the launch arguments. llama.cpp keeps no GPU
+    # offload info in /props, so -ngl and --device are the effective deciders.
+    launch = backend.get("launch") or {}
+    if launch.get("device"):
+        val = str(launch["device"])
+        if launch.get("device_name"):
+            val += f" — {launch['device_name']}"
+            if launch.get("device_name_uncertain"):
+                val += (" ⚠️ Estimated from the enumeration order "
+                        "(CUDA indexes do not match the nvidia-smi order)")
+            elif launch.get("device_name_source"):
+                val += f" (confirmed by {launch['device_name_source']})"
+        rows.append(("Device used", val))
+    ngl = launch.get("n_gpu_layers")
+    if ngl is not None:
+        if ngl == 0:
+            rows.append(("GPU offload", "⚠️ `-ngl 0` — **no layer is on the GPU "
+                                        "(CPU execution in effect)**. tok/s measures CPU performance"))
+        else:
+            rows.append(("GPU offload", f"`-ngl {ngl}`"))
+    for key, label in (("tensor_split", "tensor split"),
+                       ("main_gpu", "main GPU"), ("split_mode", "split mode"),
+                       ("threads", "threads"), ("batch_size", "batch"),
+                       ("spec_type", "speculative decoding")):
+        if launch.get(key) is not None:
+            rows.append((label, f"`{launch[key]}`"))
+    if launch.get("visible_devices_env"):
+        rows.append(("Visible device limit", ", ".join(
+            f"`{k}={v}`" for k, v in launch["visible_devices_env"].items())))
+
+    # GPUs the inference process actually ran on (multi-GPU sharded loads show here)
+    inf = (backend.get("gpu_usage") or {}).get("inference") or {}
+    if inf.get("gpus"):
+        shards = " + ".join(
+            f"GPU{g.get('index')} {g.get('name', '?')} {g.get('vram_gb', 0)}GB"
+            + ("(context only)" if g.get("context_only") else "")
+            for g in inf["gpus"]
+        )
+        val = shards
+        if inf.get("multi_gpu"):
+            val += (f" — {inf.get('vram_total_gb', 0)}GB in total, sharded over "
+                    f"{len(inf['gpus'])} cards")
+        if inf.get("process"):
+            val += f" ({inf['process']})"
+        if inf.get("uncertain"):
+            val += " ※ Could not identify the inference process; showing the process with the largest VRAM use"
+        rows.append(("GPUs used", val))
+    if backend.get("n_ctx"):
+        rows.append(("Context length", f"{backend['n_ctx']:,} tok"))
+    if backend.get("parallel_slots"):
+        rows.append(("Parallel slots", str(backend["parallel_slots"])))
+    if backend.get("model_path"):
+        rows.append(("Model file", f"`{backend['model_path']}`"))
+    if backend.get("base_url"):
+        rows.append(("Endpoint", f"`{backend['base_url']}`"))
+    if launch.get("command"):
+        rows.append(("Launch command", f"`{launch['command']}`"))
+    if backend.get("note"):
+        rows.append(("Note", str(backend["note"])))
+    if env.get("collect_error") or backend.get("collect_error"):
+        rows.append(("⚠️ Collection error",
+                     str(env.get("collect_error")
+                         or backend.get("collect_error"))))
+
+    if rows:
+        lines += ["", "| Item | Value |", "|---|---|"]
+        lines += [f"| {k} | {v} |" for k, v in rows]
+    if launch.get("n_gpu_layers") == 0:
+        lines += ["", "> ⚠️ With `-ngl 0` **the model is not on the GPU** "
+                      "(CPU execution in effect, whatever the compute backend shows). "
+                      "Do not compare it side by side with GPU execution results."]
+    if inf.get("multi_gpu"):
+        lines += ["", "> ⚠️ The model is **sharded over multiple GPUs**. "
+                      "Throughput is limited by the slower card and the GPU-to-GPU transfer, "
+                      "so it cannot be equated with a single-GPU measurement."]
+    if execution != "local":
+        lines += ["", "> ⚠️ The host above is the **measuring client**'s specs. "
+                       "Inference runs remotely, so do not compare its tok/s "
+                       "side by side with local execution results."]
+    lines.append("")
+    return lines
 
 
 def _status_icon(r) -> str:
@@ -108,11 +279,13 @@ def render_markdown(run) -> str:
     n = len(run.results)
     n_resolved = sum(r.resolved for r in run.results)
     multi = getattr(run, "multi_run", False)
+    served = getattr(run, "served_model", "")
     lines = [
         f"# llmbench Report: {run.model}",
         "",
         f"Issue Language: `{run.issue_lang}` / Tasks: {n}"
-        + (f" / Trials: ×{run.runs}" if multi else ""),
+        + (f" / Trials: ×{run.runs}" if multi else "")
+        + (f" / Served model: `{served}`" if served and served != run.model else ""),
         "",
         "## Summary",
         "",
@@ -140,6 +313,9 @@ def render_markdown(run) -> str:
             "≥1 Solved = Passed at least 1 out of N trials (reachability with retries).",
             "",
         ]
+    # Execution environment (which hardware and configuration produced this)
+    lines += _env_section(getattr(run, "environment", None) or {})
+
     # Usability assessment (directly under summary)
     lines += _usability_section(run)
 
@@ -191,20 +367,26 @@ def render_markdown(run) -> str:
         lines.append(f"| {diff} | {solved}/{len(rs)} | {avg_q} |")
 
     # Breakdown by Domain (only when non-coding graders are mixed)
-    domains = [d for d in ("security", "general", "writing", "medical")
+    domains = [d for d in ("security", "general", "writing", "medical", "culture",
+                           "uncensored")
                if any(getattr(r, "domain", "code") == d for r in run.results)]
     if domains:
         _dlabel = {"security": "🛡️ security", "general": "📋 general",
-                   "writing": "✍️ writing", "medical": "🩺 medical"}
+                   "writing": "✍️ writing", "medical": "🩺 medical",
+                   "culture": "🇯🇵 culture", "uncensored": "🔓 uncensored"}
         lines += ["", "## 🌐 By Domain (Non-coding)", "",
-                  "| Domain | Resolved | Avg Success Rate | Avg Combined |", "|---|---|---|---|"]
+                  "| Domain | Resolved | Avg Success Rate | Avg Combined | Refusals |",
+                  "|---|---|---|---|---|"]
         for d in domains:
             rs = [r for r in run.results if getattr(r, "domain", "code") == d]
             solved = sum(r.resolved for r in rs)
             sr = sum(r.success_rate for r in rs) / len(rs) * 100
             cb = sum(r.combined for r in rs) / len(rs)
+            # A refusal is "did not answer", not "does not know". Report it apart from the accuracy.
+            nref = sum(1 for r in rs if getattr(r, "refused", False))
             lines.append(
-                f"| {_dlabel[d]} | {solved}/{len(rs)} | {sr:.0f}% | {cb:.1f} |"
+                f"| {_dlabel[d]} | {solved}/{len(rs)} | {sr:.0f}% | {cb:.1f} | "
+                f"{nref}/{len(rs)} |"
             )
 
     # Task Details (artifacts and quality breakdown)
@@ -213,8 +395,9 @@ def render_markdown(run) -> str:
         lines.append(f"### {_status_icon(r)} {r.task_id} — {r.title}")
         lines.append("")
         lines.append(
-            f"- Difficulty: {r.difficulty} / "
-            f"Status: {'RESOLVED' if r.resolved else 'FAILED'}"
+            f"- Difficulty: {r.difficulty}"
+            + (f" / category: {r.category}" if getattr(r, "category", "") else "")
+            + f" / Status: {'RESOLVED' if r.resolved else 'FAILED'}"
             + (f" ({r.fail_reason})" if r.fail_reason else "")
             + f" / Usability: {usability.TIER_LABEL.get(r.usability_tier, '—')}"
         )
@@ -239,8 +422,10 @@ def render_markdown(run) -> str:
         ):
             if multi:
                 lines.append(
-                    f"- Quality Breakdown (Values below are for **1 representative trial**."
-                    f" The Quality score of {r.quality_score:.0f} above is the average across {r.runs} trials):"
+                    f"- Quality Breakdown (values below are for **1 representative trial**."
+                    f" The Quality {r.quality_score:.0f} above is the average over the"
+                    f" {r.n_pass}/{r.runs} successful trials;"
+                    f" failed trials are excluded from the denominator):"
                 )
             for name, comp in r.quality_components.items():
                 if not comp.get("enabled"):

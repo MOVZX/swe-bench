@@ -23,3 +23,20 @@ _OUTPUTS/
 
 # OS
 .DS_Store
+
+_to_delete/
+
+# config
+config.yaml.*
+config.yaml
+
+# sweep のローカル設定 (実パスを書くので追跡しない。例は tools/sweep.conf.example)
+sweep.conf
+# LABEL_PREFIX で分けたバリアント別 conf (tools/sweep_mtp.conf など)
+sweep_*.conf
+
+# ブランチ切り替え時の退避 (uv.lock.mainbak.* など)
+uv.lock.*
+
+# 適用済みパッチの置き場。適用結果そのものはコミット履歴に入るので追跡しない
+diffs/

@@ -43,13 +43,24 @@ def require_cfg(cfg: dict, key: str, name: str, hint: str = ""):
 
 @dataclass
 class GenerationResult:
-    """Single generation result including speed metrics."""
+    """Single generation result including speed metrics.
+
+    ``finish_reason`` / ``truncated`` / ``max_tokens`` are added fields with
+    default values (backward compatible). Truncation (max_tokens reached)
+    means "the extracted code is untrustworthy", so it propagates to results.json.
+    """
 
     text: str
     latency_sec: float = 0.0
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     raw: dict = field(default_factory=dict)
+    # Finish reason returned by the server (stop / length / tool_calls / ...)
+    finish_reason: str | None = None
+    # finish_reason == "length", or completion_tokens reached max_tokens
+    truncated: bool = False
+    # max_tokens used for this generation (kept as the basis for the truncation check)
+    max_tokens: int | None = None
 
     @property
     def tokens_per_sec(self) -> float | None:

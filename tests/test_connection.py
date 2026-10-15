@@ -6,9 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from llmbench import cli
 from llmbench.clients.base import expand_env
 from llmbench.clients.ollama import OllamaClient
-from llmbench.clients.openai_compat import OpenAICompatClient, fetch_served_model
+from llmbench.clients.openai_compat import (
+    OpenAICompatClient, fetch_served_model, list_remote_models,
+)
 from llmbench.runner import BenchmarkRunner
 
 
@@ -100,7 +103,6 @@ def test_auto_prefer_substring(monkeypatch):
 
 
 def test_auto_prefer_no_match_raises(monkeypatch):
-    import llmbench.requests
     import llmbench.clients.openai_compat as oc
     monkeypatch.setattr(oc.requests, "get", _fake_models_get(["llama-3"]))
     with pytest.raises(ValueError, match="auto_prefer"):
@@ -115,6 +117,102 @@ def test_fetch_served_model_empty_raises(monkeypatch):
     monkeypatch.setattr(oc.requests, "get", _fake_models_get([]))
     with pytest.raises(RuntimeError):
         fetch_served_model("http://h/v1")
+
+
+# ---------- list_remote_models (`llmbench models --remote`) ----------
+# fetch_served_model picks "the one model loaded now" (to resolve model: auto), so it
+# turns 0 entries into a RuntimeError, while list_remote_models returns the list itself.
+# For investigation 0 entries is a normal result (the caller picks the message).
+
+def test_list_remote_models_returns_all(monkeypatch):
+    import llmbench.clients.openai_compat as oc
+    monkeypatch.setattr(oc.requests, "get", _fake_models_get(["a", "b", "c"]))
+    assert list_remote_models("http://h/v1") == [
+        {"id": "a"}, {"id": "b"}, {"id": "c"},
+    ]
+
+
+def test_list_remote_models_empty_is_ok(monkeypatch):
+    import llmbench.clients.openai_compat as oc
+    monkeypatch.setattr(oc.requests, "get", _fake_models_get([]))
+    assert list_remote_models("http://h/v1") == []
+
+
+def test_list_remote_models_sends_auth_header(monkeypatch):
+    import llmbench.clients.openai_compat as oc
+    seen = {}
+
+    def _get(url, headers=None, **kw):
+        seen["url"] = url
+        seen["headers"] = headers
+        return _FakeResp({"data": [{"id": "m"}]})
+
+    monkeypatch.setattr(oc.requests, "get", _get)
+    list_remote_models("http://h/v1/", api_key="secret-key")
+    assert seen["url"] == "http://h/v1/models"
+    assert seen["headers"] == {"Authorization": "Bearer secret-key"}
+
+
+def test_list_remote_models_no_api_key_no_auth_header(monkeypatch):
+    import llmbench.clients.openai_compat as oc
+    seen = {}
+
+    def _get(url, headers=None, **kw):
+        seen["headers"] = headers
+        return _FakeResp({"data": []})
+
+    monkeypatch.setattr(oc.requests, "get", _get)
+    list_remote_models("http://h/v1")
+    assert seen["headers"] == {}
+
+
+# ---------- cli._print_remote_models (`llmbench models --remote <name>`) ----------
+
+def test_cli_remote_unknown_model(capsys):
+    cli._print_remote_models("nope", {})
+    out = capsys.readouterr().out
+    assert "models.nope is not defined" in out
+
+
+def test_cli_remote_wrong_type(capsys):
+    cli._print_remote_models("o", {"o": {"type": "ollama"}})
+    out = capsys.readouterr().out
+    assert "type: openai" in out
+
+
+def test_cli_remote_missing_env(monkeypatch, capsys):
+    monkeypatch.delenv("SOME_KEY", raising=False)
+    cli._print_remote_models(
+        "x", {"x": {"type": "openai", "base_url": "http://h/v1",
+                    "api_key": "${SOME_KEY}"}},
+    )
+    out = capsys.readouterr().out
+    assert "SOME_KEY" in out
+
+
+def test_cli_remote_lists_and_sorts(monkeypatch, capsys):
+    import llmbench.clients.openai_compat as oc
+    monkeypatch.setattr(oc.requests, "get", _fake_models_get(["zeta", "alpha", "mid"]))
+    cli._print_remote_models(
+        "x", {"x": {"type": "openai", "base_url": "http://h/v1", "model": "mid"}},
+    )
+    out = capsys.readouterr().out
+    assert out.index("alpha") < out.index("mid") < out.index("zeta")
+    assert 'model: "mid"' in out
+
+
+def test_cli_remote_connection_error(monkeypatch, capsys):
+    import llmbench.clients.openai_compat as oc
+
+    def _get(url, **kw):
+        raise oc.requests.exceptions.ConnectionError("boom")
+
+    monkeypatch.setattr(oc.requests, "get", _get)
+    cli._print_remote_models(
+        "x", {"x": {"type": "openai", "base_url": "http://h/v1"}},
+    )
+    out = capsys.readouterr().out
+    assert "Cannot fetch" in out
 
 
 # ---------- OllamaClient ----------
@@ -210,7 +308,7 @@ def test_resolve_unknown_raises(monkeypatch):
     import llmbench.runner as rn
     monkeypatch.setattr(rn, "list_ollama_models", lambda h, **k: ["other"])
     r = _runner({})
-    with pytest.raises(ValueError, match="Not installed"):
+    with pytest.raises(ValueError, match="not installed in Ollama"):
         r.resolve_model("nope")
 
 

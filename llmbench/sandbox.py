@@ -1,8 +1,10 @@
 """Isolated execution: Creating a temporary task copy and running pytest.
 
-v1 uses a venv + subprocess approach. Tasks are stdlib-only, so it directly uses
-the Python environment (with pytest installed) running llmbench itself. The original
-task directory is left completely unmodified (patches are applied only to the temp copy).
+v1 uses subprocess (no venv). Tasks are stdlib-only, so it directly uses
+the Python environment (with pytest installed) running llmbench itself.
+Only the working directory on the filesystem is isolated; there is no
+process/package isolation (the original task directory is never modified;
+patches are applied only to the temp copy).
 """
 
 from __future__ import annotations

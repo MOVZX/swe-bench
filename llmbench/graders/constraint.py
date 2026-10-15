@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 
 from . import GradeCtx, Grader, GraderEval
+from . import refusal as _refusal
 from .checks import extract_answer, run_checks
 
 _SYSTEM = """\
@@ -55,6 +56,16 @@ class ConstraintGrader(Grader):
             }
         }
         failed = [f"{r['kind']}({r['detail']})" for r in results if not r["passed"]]
+        if total == 0:
+            # A defect in the task definition, not model capability. Keep a message that
+            # names the cause so it is not mixed into the aggregate as a plain "failure".
+            reason = (
+                f"checks.json is missing or empty ({task.dir / 'checks.json'}). "
+                f"constraint grader cannot grade"
+            )
+            ev.detail_output = reason
+            ev.fail_reason = reason
+            return ev
         ev.detail_output = f"{passed}/{total} checks passed" + (
             f"; failed: {failed}" if failed else ""
         )
@@ -62,6 +73,7 @@ class ConstraintGrader(Grader):
             ev.fail_reason = f"{passed}/{total} checks passed" + (
                 f"; failed {failed}" if failed else ""
             )
+        _refusal.apply(ev, answer, raw_output, task)
         return ev
 
     def mock_gold(self, task) -> str:

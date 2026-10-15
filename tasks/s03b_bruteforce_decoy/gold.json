@@ -1,0 +1,116 @@
+{
+  "findings": [
+    {
+      "id": "ssh_brute_force",
+      "cwe": "CWE-307",
+      "any_of": [
+        "203.0.113.66",
+        "failed password",
+        "deploy",
+        "accepted password"
+      ],
+      "keywords_all": [
+        [
+          "brute",
+          "ブルートフォース",
+          "総当",
+          "辞書攻撃"
+        ]
+      ],
+      "location_any_of": [
+        "203.0.113.66",
+        "auth.log",
+        "03:11",
+        "sshd",
+        "failed password"
+      ]
+    }
+  ],
+  "allow_extra": [
+    {
+      "id": "successful_compromise_secondary",
+      "any_of": [
+        "accepted password",
+        "203.0.113.66",
+        "deploy",
+        "session opened"
+      ],
+      "keywords_all": [
+        [
+          "compromis",
+          "takeover",
+          "侵害",
+          "乗っ取",
+          "不正ログイン",
+          "successful login",
+          "認証成功",
+          "アカウント奪取"
+        ]
+      ]
+    },
+    {
+      "id": "weak_credential_secondary",
+      "any_of": [
+        "deploy",
+        "password",
+        "203.0.113.66"
+      ],
+      "keywords_all": [
+        [
+          "weak password",
+          "weak credential",
+          "弱いパスワード",
+          "脆弱なパスワード",
+          "cwe-521",
+          "password policy",
+          "パスワードポリシー",
+          "推測されやすい"
+        ]
+      ]
+    },
+    {
+      "id": "post_compromise_activity_secondary",
+      "any_of": [
+        "session opened",
+        "pam_unix",
+        "disconnect",
+        "51526",
+        "uid=0"
+      ],
+      "keywords_all": [
+        [
+          "session",
+          "セッション",
+          "post-compromise",
+          "侵害後",
+          "lateral",
+          "persistence"
+        ]
+      ]
+    },
+    {
+      "id": "missing_hardening_secondary",
+      "any_of": [
+        "sshd",
+        "root",
+        "203.0.113.66",
+        "auth.log"
+      ],
+      "keywords_all": [
+        [
+          "fail2ban",
+          "rate limit",
+          "レート制限",
+          "permitrootlogin",
+          "root login",
+          "root ログイン",
+          "多要素",
+          "mfa",
+          "公開鍵認証",
+          "アカウントロック",
+          "lockout"
+        ]
+      ]
+    }
+  ]
+}

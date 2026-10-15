@@ -1,0 +1,52 @@
+{
+  "findings": [
+    {
+      "id": "path_traversal",
+      "cwe": "CWE-22",
+      "any_of": [
+        "os.path.join",
+        "record_ref",
+        "../",
+        "name"
+      ],
+      "keywords_all": [
+        [
+          "travers",
+          "トラバーサル",
+          "パス操作",
+          "ディレクトリ横断"
+        ]
+      ],
+      "location_any_of": [
+        "fetch_record",
+        "os.path.join",
+        "/handle_entry",
+        "/process_item",
+        "record_ref"
+      ]
+    }
+  ],
+  "allow_extra": [
+    {
+      "id": "missing_auth_secondary",
+      "any_of": [
+        "/handle_entry",
+        "/process_item",
+        "app.route",
+        "handle_entry()",
+        "process_item()"
+      ],
+      "keywords_all": [
+        [
+          "authentic",
+          "認証",
+          "unauthenticated",
+          "missing auth",
+          "access control",
+          "アクセス制御",
+          "no auth"
+        ]
+      ]
+    }
+  ]
+}

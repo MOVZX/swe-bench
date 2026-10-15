@@ -11,8 +11,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Focused on rules meaningful in the context of bug fix tasks
-RUFF_SELECT = "E,F,W,B,SIM,C4,S"  # pycodestyle, pyflakes, bugbear, simplify, bandit
+# Keep only rules meaningful in the context of bug-fix tasks
+# E/W=pycodestyle, F=pyflakes, B=flake8-bugbear, SIM=flake8-simplify,
+# C4=flake8-comprehensions, S=flake8-bandit
+RUFF_SELECT = "E,F,W,B,SIM,C4,S"
 
 
 def ruff_score(

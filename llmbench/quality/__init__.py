@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,6 +10,9 @@ from .ruff_check import ruff_score
 from .complexity import complexity_score
 from .llm_review import llm_review_score
 from .sonar import sonar_score
+
+# Layer names already warned about weight<=0 (warn once per process)
+_WARNED_ZERO_WEIGHT: set[str] = set()
 
 
 @dataclass
@@ -26,7 +30,13 @@ def evaluate_quality(
 ) -> QualityResult:
     """Runs active quality layers on changed files and returns a composite score.
 
-    Disabled/failed layers are excluded and weights are re-normalized.
+    Disabled/failed/weight<=0 layers are excluded from the weights and the
+    rest are re-normalized (weights do not need to sum to 1).
+
+    A layer with `enabled: true` and `weight <= 0` is executed but does not
+    contribute to the composite. Its score still remains in components and
+    shows up in reports, so `weight_ignored: True` is set and a one-time
+    warning is printed to stderr.
     """
     components: dict = {}
     weighted: list[tuple[float, float]] = []  # (score, weight)
@@ -48,6 +58,19 @@ def evaluate_quality(
         components[name] = {"enabled": True, "score": round(score, 1), **detail}
         if w > 0:
             weighted.append((score, w))
+            return
+        # enabled with weight<=0 → paying the execution cost and discarding the result.
+        components[name]["weight_ignored"] = True
+        if name not in _WARNED_ZERO_WEIGHT:
+            _WARNED_ZERO_WEIGHT.add(name)
+            print(
+                f"⚠️  quality.{cfg_key}: enabled: true, but weight={w} so it does not"
+                f" contribute to the score (it is executed and shown in the report)."
+                f" Set a positive value in quality.{cfg_key}.weight."
+                f" Weights are re-normalized over enabled layers only, so"
+                f" they do not need to sum to 1.",
+                file=sys.stderr,
+            )
 
     add("ruff", "ruff", lambda c: ruff_score(workspace, changed_files, c))
     add("complexity", "complexity",

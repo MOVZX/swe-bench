@@ -3,8 +3,26 @@
     {
       "id": "sql_injection",
       "cwe": "CWE-89",
-      "any_of": ["cursor.execute", "query", "username", "or '1'='1"],
-      "keywords_all": ["inject"]
+      "any_of": [
+        "cursor.execute",
+        "query",
+        "username",
+        "or '1'='1"
+      ],
+      "keywords_all": [
+        [
+          "inject",
+          "インジェク",
+          "sqli"
+        ]
+      ],
+      "location_any_of": [
+        "cursor.execute",
+        "query",
+        "lookup",
+        "find_user",
+        "username"
+      ]
     }
   ]
 }

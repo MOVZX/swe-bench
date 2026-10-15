@@ -1,0 +1,131 @@
+# =============================================================================
+#  sweep.sh の設定ファイル (例)
+#
+#    cp tools/sweep.conf.example tools/sweep.conf   # ← ここに実パスを書く
+#    tools/sweep.sh --list                          # -c は不要 (自動で読む)
+#
+#    tools/sweep.conf は .gitignore 済み。個人の絶対パスを書いてよい。
+#    -c 省略時の探索順:  $SWEEP_CONF > tools/sweep.conf > <リポジトリ>/sweep.conf
+#    --no-conf を付けると読まない。
+#
+#    sweep.sh 冒頭の既定値を **plain な代入で上書き** する。
+#    ここに書いた値より CLI オプション (--quants 等) の方が優先される。
+# =============================================================================
+
+# ── 環境 ─────────────────────────────────────────────────────────────────
+#   REPO_DIR の既定は「sweep.sh の1つ上のディレクトリ」。tools/sweep.sh として
+#   置いている限り指定不要。リポジトリ外から呼ぶときだけ有効にする。
+#   LLMBENCH / CONFIG / TASKS_DIR / OUT_ROOT / RESULTS_DIR は REPO_DIR から
+#   自動で導出されるので、別の場所を指したいときだけ書く。
+# REPO_DIR="$HOME/path/to/swe-bench"
+# LLMBENCH="$REPO_DIR/.venv/bin/llmbench"
+MODEL_DIR=/llm/models/Qwen3.8-27B-GGUF
+MODEL_PREFIX=Qwen3.8-27B
+
+# 結果ラベル / resume 用 state ファイルの接頭辞 (省略可)。
+#   設定すると --label が <接頭辞>-<量子化>-<スイート> になり、state も
+#   sweep_state_<接頭辞>.tsv に分かれる。
+#   同じ量子化で別モデルを比較するとき (例: MTP 版 / 非MTP 版) に使う。
+#   conf を2本用意し、MODEL_PREFIX と LABEL_PREFIX だけ変えて -c で切り替える:
+#     tools/sweep_mtp.conf   … MODEL_PREFIX=<...>-MTP / LABEL_PREFIX=mtp
+#     tools/sweep_nomtp.conf … MODEL_PREFIX=<...>     / LABEL_PREFIX=nomtp
+#   未設定なら従来どおり <量子化>-<スイート> / sweep_state.tsv。
+# LABEL_PREFIX=
+
+LLAMA_SERVER=/usr/local/bin/llama-server
+PORT=8085
+
+# ── 対象量子化 ───────────────────────────────────────────────────────────
+QUANTS="Q4_K_M Q5_K_M Q6_K"
+# QUANTS=auto                       # MODEL_DIR の *.gguf を全部
+# QUANT_EXCLUDE='UD-'               # auto のとき UD- 系を除外
+
+# ── どのスイートをやるか / runs ──────────────────────────────────────────
+RUN_L6=1;      RUNS_L6=5           # llmbench run --with-l6      --runs 5
+RUN_L7=1;      RUNS_L7=3           # llmbench run --only-l7      --runs 3
+RUN_CULTURE=1; RUNS_CULTURE=3      # llmbench run --only-culture --lang ja --runs 3
+RUN_UNC=1;     RUNS_UNC=3          # llmbench run --only-unc     --runs 3
+RUN_SEC=0;     RUNS_SEC=3          # llmbench run --only-sec     --runs 3
+RUN_SECAUG=0;  RUNS_SECAUG=3       # llmbench run --only-secaug  --runs 3
+RUN_GEN=0;     RUNS_GEN=3          # llmbench run --only-gen     --runs 3
+RUN_MED=0;     RUNS_MED=3          # llmbench run --only-med --lang ja --runs 3
+RUN_WRITE=0;   RUNS_WRITE=1        # llmbench run --only-write   --runs 1
+SUITE_ORDER="l6 l7 culture unc sec secaug gen med write"
+
+# スイート別の思考上限 (config の reasoning_max_tokens を一時 config で上書き)
+# REASONING_MAX_TOKENS_SEC=32768
+# REASONING_MAX_TOKENS_SECAUG=32768
+# POST_SEC_CLASSIFY=1               # sec/secaug 完了後に tools/sec_classify.py で分類
+
+# ── llama-server 共通引数 ────────────────────────────────────────────────
+#
+#  ⚠️ ctx と KV は VRAM を見て決めること。-ngl 99 を付けていても、
+#     モデル + KV が VRAM に収まらなければ llama.cpp は一部の層を CPU に置き、
+#     生成が数十倍遅くなる (ログには何も出ない)。
+#
+#     ただし **KV の大きさはモデルの構造で桁が変わる**。層数から推測しないこと。
+#     Qwen3.8-27B は config.json で 64層中16層だけがフルAttention (残り48層は線形注意)。
+#     KV は 68 KB/token しかなく、ctx 65536 でも 4.25GiB (probe の 17/65 は MTP 層込み)。
+#       python gguf_probe.py <gguf>   # 「KVキャッシュ: N/M 層が保持 = X KB/token」
+#
+#     RTX 5090 32GB / Qwen3.8-27B-Uncensored / ctx 65536 / KV f16 / MTP ありの実測:
+#       Q4_K_M  21,210 MiB    Q6_K  26,258 MiB   (32,607 MiB 中)
+#     → この構成では ctx を削る必要も KV を量子化する必要もない。
+#
+#     VRAM 予算から詰めるときは gguf_probe / gguf_plan (docs/GGUF_PROBE.md):
+#       python gguf_probe.py --json --out gguf.json /llm/models/Qwen3.8-27B-GGUF/*.gguf
+#       python gguf_plan.py gguf.json --vram 31 --pick Q4_K_M
+#
+#     起動後は VRAM 使用量をログと manifest に記録し、モデルサイズの半分に
+#     満たなければ警告する。警告が出たら ctx か KV を下げること。
+#
+#  デバイス指定 (--device)。空なら llama.cpp が見えている全デバイスを使う。
+#  搭載構成に応じて使い分ける。名前は `llama-server --list-devices` で確認:
+#     1枚だけ使う          DEVICE=CUDA0
+#     2枚に分割する        DEVICE=CUDA0,CUDA1  +  TENSOR_SPLIT=0.5,0.5
+#     重い量子化だけ2枚    DEVICE=CUDA0 にしておき、下の OVERRIDE_* で個別に上書き
+#     ROCm / Vulkan        DEVICE=ROCm0 / Vulkan0
+#  ⚠️ 使うデバイスを変えると速度の比較条件が変わる。量子化ごとに変えた場合は
+#     manifest の VRAM 記録と併せてレポートに書くこと。
+# DEVICE=CUDA0
+# TENSOR_SPLIT=0.5,0.5
+
+NGL=99
+FLASH_ATTN=on                       # KV を量子化するなら on 必須
+CTX=65536
+KV_TYPE=                            # 空 = f16。VRAM が足りないときだけ q8_0 にする
+PARALLEL=1
+BATCH=2048
+UBATCH=512
+
+#  ⚠️ MTP (投機デコード) は必ず確認すること。効くファイルで付けないのは丸損。
+#     gguf_probe が「MTP/nextn テンソル: N 本」と出せば N>0 で使える。
+#     ⚠️ 「出力は変わらない」とは言えない。保証されるのは出力そのものの同一性ではなく
+#        **出力分布の一致**で、それも数値誤差の範囲内 (llama.cpp は厳密な一致が要るなら
+#        greedy を使えと明記。量子化ターゲットで greedy でも分岐する未解決の報告 #25618 あり)。
+#        → MTP は条件として固定し、manifest に記録する。スコアは runs>1 の平均で見る。
+#     実測 (RTX 5090 / Qwen3.8-27B-Uncensored-Q4_K_M / ctx 65536 / KV f16):
+#         MTP なし  74.6 tok/s  →  MTP あり  136.3 tok/s   (1.84倍)
+#     VRAM は draft 分で +1GB 程度。
+#
+#     ⚠️ 同じ「Qwen3.8-27B」でも MTP を持つファイルと持たないファイルがある
+#        (実測: Uncensored 版は4本あり、無印は無し)。持たないファイルに付けると
+#        llama-server は起動に失敗するが、MTP_AUTO=1 (既定) なら自動で外して
+#        警告し、manifest の mtp 列に yes/no を残す。
+#        → 混在していてもこの行はこのままでよい。ただし mtp 列が混ざったら
+#          tok/s は比較できない (品質スコアは runs>1 の平均なら比較できる)。
+SERVER_EXTRA_ARGS="--spec-type draft-mtp"
+
+# ── 大きい量子化だけ条件を落とす (共通引数の後ろに付くので後勝ち) ────────
+#   ⚠️ ctx やデバイスを量子化ごとに変えると比較条件が揃わなくなる。まず全量子化が
+#      同じ条件で載るかを確認し、載らないものだけ下げて、その旨をレポートに書くこと。
+# OVERRIDE_Q6_K="--ctx-size 16384"
+# OVERRIDE_Q8_0="--ctx-size 8192"
+#   重い量子化だけ2枚に分割する例:
+# OVERRIDE_Q8_0="--device CUDA0,CUDA1 --tensor-split 0.5,0.5"
+
+# ── 挙動 ─────────────────────────────────────────────────────────────────
+HEALTH_TIMEOUT=1200                 # 27B を SSD から読むと数分かかることがある
+VRAM_SETTLE=15
+# SUITE_TIMEOUT=21600               # 1スイート6時間で打ち切る
+# SKIP_PREFLIGHT=1
