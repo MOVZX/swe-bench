@@ -5,7 +5,7 @@ models:
   # ── LAN servers (llama.cpp) ─────────────────────────────────────
   # Thinking Qwen models. temperature: 1.0 follows the official Qwen3.8
   # recommendation for thinking mode.
-  "Hinata - Swift 1.5 Qwen 3.8 Flash Next":
+  "Hinata - Qwen 3.8 Flash Next":
     type: openai
     base_url: "http://10.4.11.130:8080/v1"
     api_key: "SKS-id@123"

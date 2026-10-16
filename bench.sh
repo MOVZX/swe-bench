@@ -15,10 +15,10 @@ show_help() {
     echo -e "${YELLOW}Usage:${NC} $0 <model_number_or_name>"
     echo ""
     echo -e "${CYAN}Available models:${NC}"
-    echo -e "  ${GREEN}0)${NC} Hinata (Swift-1.5-Qwen3.8-Flash-Next-W4A16-Attn8-FP8PLE)"
-    echo -e "  ${GREEN}1)${NC} Scarlet (Swift1.5-Qwen3.8-Flash-Next-W4A16-Merlin)"
-    echo -e "  ${GREEN}1)${NC} Yuuki (Swift-1.5-Qwen3.8-27B-INT8-W8A16-AutoRound-MTP)"
-    echo -e "  ${GREEN}1)${NC} Emma (Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive)"
+    echo -e "  ${GREEN}0)${NC} Hinata (Qwen 3.8 Flash Next)"
+    echo -e "  ${GREEN}1)${NC} Scarlet (Swift 1.5 Qwen 3.8 Flash Next)"
+    echo -e "  ${GREEN}2)${NC} Yuuki (Swift 1.5 Qwen 3.8 27B)"
+    echo -e "  ${GREEN}3)${NC} Emma (Qwen 3.6 35B-A3B)"
     echo ""
     exit 1
 }
@@ -28,7 +28,7 @@ if [ -z "$1" ]; then
 fi
 
 case "$1" in
-    0|Hinata) MODEL="Hinata - Swift 1.5 Qwen 3.8 Flash Next" ;;
+    0|Hinata) MODEL="Hinata - Qwen 3.8 Flash Next" ;;
     1|Scarlet) MODEL="Scarlet - Swift 1.5 Qwen 3.8 Flash Next" ;;
     2|Yuuki) MODEL="Yuuki - Swift 1.5 Qwen 3.8 27B" ;;
     3|Emma) MODEL="Emma - Qwen 3.6 35B-A3B" ;;
